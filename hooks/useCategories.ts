@@ -10,7 +10,7 @@ import {
   updateCategory,
   deleteCategory,
   getCategoryCount,
-} from "@/core/database/categories";
+} from "@/core/sync/pb-categories";
 import type { Category, CreateCategoryInput, UpdateCategoryInput } from "@/core/types/category";
 
 export function useCategories(kioskOnly: boolean = false) {

@@ -11,7 +11,7 @@ import {
   updateProduct,
   deleteProduct,
   getProductCount,
-} from "@/core/database/products";
+} from "@/core/sync/pb-products";
 import type { Product, CreateProductInput, UpdateProductInput } from "@/core/types/product";
 
 export function useProducts(kioskOnly: boolean = false) {
