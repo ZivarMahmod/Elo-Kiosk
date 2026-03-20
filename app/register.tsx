@@ -62,8 +62,8 @@ export default function RegisterScreen() {
       await pb.collection("users").authWithPassword(trimmedEmail, password);
       await saveAuthStore();
 
-      // Go directly to mode-select
-      router.replace("/mode-select");
+      // Android → kiosk directly, Web → mode-select
+      router.replace(Platform.OS === "android" ? "/(kiosk)" : "/mode-select");
     } catch (err: any) {
       console.error("[Register] Error:", err);
 

@@ -13,7 +13,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/hooks/useAuth";
@@ -36,7 +35,7 @@ export default function LoginScreen() {
     try {
       const result = await login(email, password);
       if (result.success) {
-        router.replace("/mode-select");
+        router.replace(Platform.OS === "android" ? "/(kiosk)" : "/mode-select");
       } else {
         setError(result.error || "Inloggningen misslyckades");
       }

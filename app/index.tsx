@@ -3,12 +3,13 @@
  *
  * 1. No license key → /activate
  * 2. License exists but not logged in → /auth-choice
- * 3. Logged in + kiosk locked → /(kiosk)
- * 4. Logged in → /mode-select
+ * 3. Logged in + Android → /(kiosk) directly
+ * 4. Logged in + kiosk locked → /(kiosk)
+ * 5. Logged in + web → /mode-select
  */
 
 import { useEffect } from "react";
-import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { View, ActivityIndicator, StyleSheet, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
@@ -40,7 +41,13 @@ export default function IndexScreen() {
         return;
       }
 
-      // If kiosk is locked and has been registered → go straight to kiosk
+      // Android → always go straight to kiosk mode
+      if (Platform.OS === "android") {
+        router.replace("/(kiosk)");
+        return;
+      }
+
+      // Web: if kiosk is locked → kiosk mode, otherwise mode-select
       if (settings.kioskLocked && kioskId) {
         router.replace("/(kiosk)");
         return;
