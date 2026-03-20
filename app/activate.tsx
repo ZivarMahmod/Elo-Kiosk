@@ -80,8 +80,8 @@ export default function ActivateScreen() {
       // Persist license data locally
       await saveLicenseData(trimmed, license.tenantId, kiosk.id);
 
-      // Navigate to login
-      router.replace("/login");
+      // Navigate to auth choice (login or register)
+      router.replace("/auth-choice");
     } catch (err: any) {
       console.error("[Activate] Error:", err);
 

@@ -2,7 +2,7 @@
  * Entry point — redirects based on activation + auth state + kiosk lock
  *
  * 1. No license key → /activate
- * 2. License exists but not logged in → /login
+ * 2. License exists but not logged in → /auth-choice
  * 3. Logged in + kiosk locked → /(kiosk)
  * 4. Logged in → /mode-select
  */
@@ -36,7 +36,7 @@ export default function IndexScreen() {
       }
 
       if (!isAuthenticated) {
-        router.replace("/login");
+        router.replace("/auth-choice");
         return;
       }
 

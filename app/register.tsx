@@ -1,6 +1,6 @@
 /**
- * Login screen — authenticates against PocketBase users collection
- * Includes "forgot password" link that sends reset email via PocketBase
+ * Register screen — creates a new user in PocketBase
+ * Automatically links to the saved license/tenant
  */
 
 import { useState } from "react";
@@ -13,56 +13,71 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useAuth } from "@/hooks/useAuth";
-import pb from "@/core/sync/pocketbase";
+import pb, { saveAuthStore, getLicenseData } from "@/core/sync/pocketbase";
 
-export default function LoginScreen() {
+export default function RegisterScreen() {
   const router = useRouter();
-  const { login } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [resetSent, setResetSent] = useState(false);
 
-  const handleLogin = async () => {
+  const handleRegister = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+
+    if (!trimmedEmail) {
+      setError("E-postadress krävs");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Lösenordet måste vara minst 8 tecken");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Lösenorden matchar inte");
+      return;
+    }
+
     setError("");
     setLoading(true);
 
     try {
-      const result = await login(email, password);
-      if (result.success) {
-        router.replace("/mode-select");
-      } else {
-        setError(result.error || "Inloggningen misslyckades");
-      }
+      // Get the saved license data to link user to tenant
+      const license = await getLicenseData();
+
+      // Create user in PocketBase — password is hashed automatically by PB
+      await pb.collection("users").create({
+        email: trimmedEmail,
+        password: password,
+        passwordConfirm: confirmPassword,
+        emailVisibility: true,
+        tenantId: license.tenantId || "",
+      });
+
+      // Auto-login after registration
+      await pb.collection("users").authWithPassword(trimmedEmail, password);
+      await saveAuthStore();
+
+      // Go directly to mode-select
+      router.replace("/mode-select");
     } catch (err: any) {
-      setError(err.message || "Ett fel uppstod");
+      console.error("[Register] Error:", err);
+
+      if (err?.data?.data?.email?.code === "validation_invalid_unique") {
+        setError("E-postadressen är redan registrerad");
+      } else if (err?.data?.data?.password?.message) {
+        setError(err.data.data.password.message);
+      } else if (err?.status === 0 || err?.message?.includes("fetch")) {
+        setError("Kunde inte ansluta till servern");
+      } else {
+        setError("Registreringen misslyckades. Försök igen.");
+      }
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleForgotPassword = async () => {
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail) {
-      setError("Ange din e-postadress först");
-      return;
-    }
-
-    try {
-      await pb.collection("users").requestPasswordReset(trimmedEmail);
-      setResetSent(true);
-      setError("");
-    } catch (err: any) {
-      // PocketBase returns 400 even if email doesn't exist (security)
-      // Show success anyway to avoid email enumeration
-      setResetSent(true);
-      setError("");
     }
   };
 
@@ -78,7 +93,7 @@ export default function LoginScreen() {
             <Text style={styles.logoText}>EK</Text>
           </View>
           <Text style={styles.title}>Elo Kiosk</Text>
-          <Text style={styles.subtitle}>Logga in med ditt konto</Text>
+          <Text style={styles.subtitle}>Skapa ett nytt konto</Text>
         </View>
 
         {/* Form */}
@@ -87,7 +102,7 @@ export default function LoginScreen() {
           <TextInput
             style={styles.input}
             value={email}
-            onChangeText={(t) => { setEmail(t); setResetSent(false); }}
+            onChangeText={setEmail}
             placeholder="namn@foretag.se"
             placeholderTextColor="#a0a0a0"
             keyboardType="email-address"
@@ -100,39 +115,38 @@ export default function LoginScreen() {
             style={styles.input}
             value={password}
             onChangeText={setPassword}
-            placeholder="Ditt lösenord"
+            placeholder="Minst 8 tecken"
             placeholderTextColor="#a0a0a0"
             secureTextEntry
           />
 
-          {/* Forgot password */}
-          <TouchableOpacity onPress={handleForgotPassword}>
-            <Text style={styles.forgotLink}>Glömt lösenord?</Text>
-          </TouchableOpacity>
-
-          {resetSent && (
-            <Text style={styles.success}>
-              Ett återställningsmail har skickats till {email.trim()}.
-            </Text>
-          )}
+          <Text style={styles.label}>Bekräfta lösenord</Text>
+          <TextInput
+            style={styles.input}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            placeholder="Skriv lösenordet igen"
+            placeholderTextColor="#a0a0a0"
+            secureTextEntry
+          />
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <TouchableOpacity
             style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleLogin}
+            onPress={handleRegister}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.buttonText}>Logga in</Text>
+              <Text style={styles.buttonText}>Skapa konto</Text>
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => router.replace("/register")}>
+          <TouchableOpacity onPress={() => router.replace("/login")}>
             <Text style={styles.hint}>
-              Inget konto? <Text style={styles.hintLink}>Skapa ett här</Text>
+              Har du redan ett konto? <Text style={styles.hintLink}>Logga in</Text>
             </Text>
           </TouchableOpacity>
         </View>
@@ -206,19 +220,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#1a1a1a",
     backgroundColor: "#f9fafb",
-  },
-  forgotLink: {
-    fontSize: 13,
-    color: "#2d6b5a",
-    textAlign: "right",
-    marginTop: 8,
-    fontWeight: "600",
-  },
-  success: {
-    color: "#16a34a",
-    fontSize: 13,
-    marginTop: 8,
-    textAlign: "center",
   },
   error: {
     color: "#dc2626",
