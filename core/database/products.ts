@@ -1,29 +1,38 @@
 /**
  * Product CRUD operations
+ * All queries filter by kioskId for per-kiosk data isolation
  */
 
 import { getDatabase, generateId } from "./db";
+import { getActiveKioskId } from "../sync/pocketbase";
 import type { Product, CreateProductInput, UpdateProductInput } from "../types/product";
 
 export async function getAllProducts(): Promise<Product[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<any>("SELECT * FROM products ORDER BY sortWeight ASC, name ASC");
+  const kioskId = await getActiveKioskId();
+  const rows = await db.getAllAsync<any>(
+    "SELECT * FROM products WHERE kioskId = ? ORDER BY sortWeight ASC, name ASC",
+    kioskId
+  );
   return rows.map(parseProductRow);
 }
 
 export async function getProductsByCategory(categoryId: string): Promise<Product[]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<any>(
-    "SELECT * FROM products WHERE categoryId = ? ORDER BY sortWeight ASC, name ASC",
-    categoryId
+    "SELECT * FROM products WHERE kioskId = ? AND categoryId = ? ORDER BY sortWeight ASC, name ASC",
+    kioskId, categoryId
   );
   return rows.map(parseProductRow);
 }
 
 export async function getKioskProducts(): Promise<Product[]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<any>(
-    "SELECT * FROM products WHERE showOnKiosk = 1 AND stockStatus != 'dold' ORDER BY sortWeight ASC, name ASC"
+    "SELECT * FROM products WHERE kioskId = ? AND showOnKiosk = 1 AND stockStatus != 'dold' ORDER BY sortWeight ASC, name ASC",
+    kioskId
   );
   return rows.map(parseProductRow);
 }
@@ -36,17 +45,19 @@ export async function getProductById(id: string): Promise<Product | null> {
 
 export async function createProduct(input: CreateProductInput): Promise<Product> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const id = generateId("prod");
   const now = new Date().toISOString();
 
   await db.runAsync(
-    `INSERT INTO products (id, name, sku, price, quantity, categoryId, description, imageUrl,
+    `INSERT INTO products (id, kioskId, name, sku, price, quantity, categoryId, description, imageUrl,
       brand, descriptionShort, descriptionLong, campaignPrice, campaignFrom, campaignTo,
       backgroundColor, textColor, badgeLabel, badgeColor, stockStatus, minStockLevel,
       sortWeight, showOnKiosk, allergens, nutritionInfo, vatRate, costPrice, supplierName,
       internalNote, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
+    kioskId,
     input.name,
     input.sku ?? "",
     input.price,
@@ -120,7 +131,11 @@ export async function deleteProduct(id: string): Promise<void> {
 
 export async function getProductCount(): Promise<number> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM products");
+  const kioskId = await getActiveKioskId();
+  const row = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM products WHERE kioskId = ?",
+    kioskId
+  );
   return row?.count ?? 0;
 }
 

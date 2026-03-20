@@ -1,14 +1,16 @@
 /**
  * SQLite table definitions for Elo Kiosk
  * All tables matching admin portal data model
+ * kioskId column enables per-kiosk data isolation
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_TABLES_SQL = `
 -- Products table with all enhanced kiosk fields
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
+  kioskId TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
   sku TEXT DEFAULT '',
   price REAL NOT NULL DEFAULT 0,
@@ -44,6 +46,7 @@ CREATE TABLE IF NOT EXISTS products (
 -- Categories table
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY,
+  kioskId TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
   status INTEGER DEFAULT 1,
   description TEXT,
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS categories (
 -- Receipts table
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
+  kioskId TEXT NOT NULL DEFAULT '',
   kvittoNummer TEXT NOT NULL,
   datum TEXT NOT NULL,
   tid TEXT NOT NULL,
@@ -139,10 +143,12 @@ CREATE TABLE IF NOT EXISTS tags (
   createdAt TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Key-value settings store
+-- Key-value settings store (kioskId as composite key)
 CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
+  key TEXT NOT NULL,
+  kioskId TEXT NOT NULL DEFAULT '',
+  value TEXT NOT NULL,
+  PRIMARY KEY (key, kioskId)
 );
 
 -- Kiosk identity and account linking
@@ -158,4 +164,30 @@ CREATE TABLE IF NOT EXISTS kiosk_identity (
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER NOT NULL
 );
+`;
+
+/**
+ * Migration from schema v1 → v2: add kioskId columns
+ */
+export const MIGRATION_V1_TO_V2 = `
+ALTER TABLE products ADD COLUMN kioskId TEXT NOT NULL DEFAULT '';
+ALTER TABLE categories ADD COLUMN kioskId TEXT NOT NULL DEFAULT '';
+ALTER TABLE receipts ADD COLUMN kioskId TEXT NOT NULL DEFAULT '';
+`;
+
+/**
+ * Settings table migration v1 → v2:
+ * Must be done programmatically since we're changing the primary key
+ */
+export const SETTINGS_MIGRATION_SQL = `
+CREATE TABLE IF NOT EXISTS settings_v2 (
+  key TEXT NOT NULL,
+  kioskId TEXT NOT NULL DEFAULT '',
+  value TEXT NOT NULL,
+  PRIMARY KEY (key, kioskId)
+);
+INSERT OR IGNORE INTO settings_v2 (key, kioskId, value)
+  SELECT key, '' as kioskId, value FROM settings;
+DROP TABLE settings;
+ALTER TABLE settings_v2 RENAME TO settings;
 `;

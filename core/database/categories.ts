@@ -1,22 +1,28 @@
 /**
  * Category CRUD operations
+ * All queries filter by kioskId for per-kiosk data isolation
  */
 
 import { getDatabase, generateId } from "./db";
+import { getActiveKioskId } from "../sync/pocketbase";
 import type { Category, CreateCategoryInput, UpdateCategoryInput } from "../types/category";
 
 export async function getAllCategories(): Promise<Category[]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<any>(
-    "SELECT * FROM categories ORDER BY sortOrder ASC, name ASC"
+    "SELECT * FROM categories WHERE kioskId = ? ORDER BY sortOrder ASC, name ASC",
+    kioskId
   );
   return rows.map(parseCategoryRow);
 }
 
 export async function getKioskCategories(): Promise<Category[]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<any>(
-    "SELECT * FROM categories WHERE showOnKiosk = 1 AND status = 1 ORDER BY sortOrder ASC, name ASC"
+    "SELECT * FROM categories WHERE kioskId = ? AND showOnKiosk = 1 AND status = 1 ORDER BY sortOrder ASC, name ASC",
+    kioskId
   );
   return rows.map(parseCategoryRow);
 }
@@ -29,14 +35,16 @@ export async function getCategoryById(id: string): Promise<Category | null> {
 
 export async function createCategory(input: CreateCategoryInput): Promise<Category> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const id = generateId("cat");
   const now = new Date().toISOString();
 
   await db.runAsync(
-    `INSERT INTO categories (id, name, status, description, emoji, color, subtitle, parentId,
+    `INSERT INTO categories (id, kioskId, name, status, description, emoji, color, subtitle, parentId,
       visibleFrom, visibleTo, bannerImageUrl, sortOrder, showOnKiosk, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
+    kioskId,
     input.name,
     input.status !== false ? 1 : 0,
     input.description ?? null,
@@ -92,7 +100,11 @@ export async function deleteCategory(id: string): Promise<void> {
 
 export async function getCategoryCount(): Promise<number> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM categories");
+  const kioskId = await getActiveKioskId();
+  const row = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM categories WHERE kioskId = ?",
+    kioskId
+  );
   return row?.count ?? 0;
 }
 

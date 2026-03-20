@@ -1,8 +1,10 @@
 /**
  * Settings read/write operations
+ * All queries filter by kioskId for per-kiosk data isolation
  */
 
 import { getDatabase } from "./db";
+import { getActiveKioskId } from "../sync/pocketbase";
 import type { KioskSettings } from "../types/settings";
 import { DEFAULT_SETTINGS } from "../types/settings";
 
@@ -11,8 +13,10 @@ import { DEFAULT_SETTINGS } from "../types/settings";
  */
 export async function getAllSettings(): Promise<KioskSettings> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<{ key: string; value: string }>(
-    "SELECT key, value FROM settings"
+    "SELECT key, value FROM settings WHERE kioskId = ?",
+    kioskId
   );
 
   const result: Record<string, any> = { ...DEFAULT_SETTINGS };
@@ -46,9 +50,10 @@ export async function getSetting<K extends keyof KioskSettings>(
   key: K
 ): Promise<KioskSettings[K]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const row = await db.getFirstAsync<{ value: string }>(
-    "SELECT value FROM settings WHERE key = ?",
-    key
+    "SELECT value FROM settings WHERE key = ? AND kioskId = ?",
+    key, kioskId
   );
 
   if (!row) return DEFAULT_SETTINGS[key];
@@ -73,13 +78,15 @@ export async function updateSettings(
   updates: Partial<KioskSettings>
 ): Promise<void> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
 
   for (const [key, value] of Object.entries(updates)) {
     if (value === undefined) continue;
     const serialized = typeof value === "object" ? JSON.stringify(value) : String(value);
     await db.runAsync(
-      "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+      "INSERT OR REPLACE INTO settings (key, kioskId, value) VALUES (?, ?, ?)",
       key,
+      kioskId,
       serialized
     );
   }
@@ -93,10 +100,12 @@ export async function updateSetting<K extends keyof KioskSettings>(
   value: KioskSettings[K]
 ): Promise<void> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const serialized = typeof value === "object" ? JSON.stringify(value) : String(value);
   await db.runAsync(
-    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+    "INSERT OR REPLACE INTO settings (key, kioskId, value) VALUES (?, ?, ?)",
     key,
+    kioskId,
     serialized
   );
 }

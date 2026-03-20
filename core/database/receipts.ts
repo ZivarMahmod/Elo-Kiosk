@@ -1,23 +1,28 @@
 /**
  * Receipt CRUD operations
+ * All queries filter by kioskId for per-kiosk data isolation
  */
 
 import { getDatabase, generateId } from "./db";
+import { getActiveKioskId } from "../sync/pocketbase";
 import type { Receipt, CreateReceiptInput, UpdateReceiptInput } from "../types/receipt";
 
 export async function getAllReceipts(): Promise<Receipt[]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<any>(
-    "SELECT * FROM receipts ORDER BY createdAt DESC"
+    "SELECT * FROM receipts WHERE kioskId = ? ORDER BY createdAt DESC",
+    kioskId
   );
   return rows.map(parseReceiptRow);
 }
 
 export async function getReceiptsByDate(datum: string): Promise<Receipt[]> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const rows = await db.getAllAsync<any>(
-    "SELECT * FROM receipts WHERE datum = ? ORDER BY tid DESC",
-    datum
+    "SELECT * FROM receipts WHERE kioskId = ? AND datum = ? ORDER BY tid DESC",
+    kioskId, datum
   );
   return rows.map(parseReceiptRow);
 }
@@ -30,13 +35,15 @@ export async function getReceiptById(id: string): Promise<Receipt | null> {
 
 export async function createReceipt(input: CreateReceiptInput): Promise<Receipt> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const id = generateId("rcpt");
   const now = new Date().toISOString();
 
   await db.runAsync(
-    `INSERT INTO receipts (id, kvittoNummer, datum, tid, items, total, status, tagged, tagType, betalning, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO receipts (id, kioskId, kvittoNummer, datum, tid, items, total, status, tagged, tagType, betalning, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
+    kioskId,
     input.kvittoNummer,
     input.datum,
     input.tid,
@@ -75,26 +82,32 @@ export async function deleteReceipt(id: string): Promise<void> {
 
 export async function getReceiptCount(): Promise<number> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM receipts");
+  const kioskId = await getActiveKioskId();
+  const row = await db.getFirstAsync<{ count: number }>(
+    "SELECT COUNT(*) as count FROM receipts WHERE kioskId = ?",
+    kioskId
+  );
   return row?.count ?? 0;
 }
 
 export async function getTodayRevenue(): Promise<number> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const today = new Date().toISOString().split("T")[0];
   const row = await db.getFirstAsync<{ total: number }>(
-    "SELECT COALESCE(SUM(total), 0) as total FROM receipts WHERE datum = ?",
-    today
+    "SELECT COALESCE(SUM(total), 0) as total FROM receipts WHERE kioskId = ? AND datum = ?",
+    kioskId, today
   );
   return row?.total ?? 0;
 }
 
 export async function getTodayReceiptCount(): Promise<number> {
   const db = await getDatabase();
+  const kioskId = await getActiveKioskId();
   const today = new Date().toISOString().split("T")[0];
   const row = await db.getFirstAsync<{ count: number }>(
-    "SELECT COUNT(*) as count FROM receipts WHERE datum = ?",
-    today
+    "SELECT COUNT(*) as count FROM receipts WHERE kioskId = ? AND datum = ?",
+    kioskId, today
   );
   return row?.count ?? 0;
 }

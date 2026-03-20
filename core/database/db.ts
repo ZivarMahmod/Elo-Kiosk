@@ -4,8 +4,9 @@
  */
 
 import { Platform } from "react-native";
-import { CREATE_TABLES_SQL, SCHEMA_VERSION } from "./schema";
+import { CREATE_TABLES_SQL, SCHEMA_VERSION, MIGRATION_V1_TO_V2, SETTINGS_MIGRATION_SQL } from "./schema";
 import { DEFAULT_SETTINGS } from "../types/settings";
+import { getActiveKioskId } from "../sync/pocketbase";
 
 // ── Web-compatible database interface ──
 interface DbRow { [key: string]: any; }
@@ -241,22 +242,64 @@ async function initializeDatabase(db: DatabaseInterface): Promise<void> {
     );
     await seedDefaultSettings(db);
     await seedSampleData(db);
+  } else if (versionRow.version < 2) {
+    // Migrate v1 → v2: add kioskId columns
+    await migrateToV2(db);
+    await db.runAsync("UPDATE schema_version SET version = ?", SCHEMA_VERSION);
   }
 }
 
+async function migrateToV2(db: DatabaseInterface): Promise<void> {
+  if (Platform.OS === "web") {
+    // Web (localStorage) doesn't need ALTER TABLE — the WebDatabase
+    // doesn't enforce schemas, it just stores JSON objects.
+    // Existing rows will get kioskId = '' by default.
+    return;
+  }
+
+  // Native SQLite: add kioskId columns to products, categories, receipts
+  const statements = MIGRATION_V1_TO_V2.split(";").filter(s => s.trim());
+  for (const stmt of statements) {
+    try {
+      await db.execAsync(stmt.trim() + ";");
+    } catch (err: any) {
+      // Column may already exist if migration was partially applied
+      if (!err?.message?.includes("duplicate column")) {
+        console.error("[DB] Migration error:", err);
+      }
+    }
+  }
+
+  // Migrate settings table to composite primary key
+  try {
+    const settingsStatements = SETTINGS_MIGRATION_SQL.split(";").filter(s => s.trim());
+    for (const stmt of settingsStatements) {
+      await db.execAsync(stmt.trim() + ";");
+    }
+  } catch (err: any) {
+    console.error("[DB] Settings migration error:", err);
+  }
+
+  console.log("[DB] Migrated to schema v2 (kioskId isolation)");
+}
+
 async function seedDefaultSettings(db: DatabaseInterface): Promise<void> {
+  const kioskId = await getActiveKioskId();
   const entries = Object.entries(DEFAULT_SETTINGS);
   for (const [key, value] of entries) {
     const serialized = typeof value === "object" ? JSON.stringify(value) : String(value);
     await db.runAsync(
-      "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+      "INSERT OR IGNORE INTO settings (key, kioskId, value) VALUES (?, ?, ?)",
       key,
+      kioskId,
       serialized
     );
   }
 }
 
 async function seedSampleData(db: DatabaseInterface): Promise<void> {
+  const kioskId = await getActiveKioskId();
+
   const categories = [
     { id: "cat-1", name: "Dryck", emoji: "🥤", color: "#3b82f6", subtitle: "Läsk, energi, kaffe", sortOrder: 1 },
     { id: "cat-2", name: "Snacks", emoji: "🍫", color: "#f59e0b", subtitle: "Chips, choklad, bars", sortOrder: 2 },
@@ -266,8 +309,8 @@ async function seedSampleData(db: DatabaseInterface): Promise<void> {
 
   for (const cat of categories) {
     await db.runAsync(
-      "INSERT OR IGNORE INTO categories (id, name, emoji, color, subtitle, sortOrder, status, showOnKiosk) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      cat.id, cat.name, cat.emoji, cat.color, cat.subtitle, cat.sortOrder, 1, 1
+      "INSERT OR IGNORE INTO categories (id, kioskId, name, emoji, color, subtitle, sortOrder, status, showOnKiosk) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      cat.id, kioskId, cat.name, cat.emoji, cat.color, cat.subtitle, cat.sortOrder, 1, 1
     );
   }
 
@@ -296,8 +339,8 @@ async function seedSampleData(db: DatabaseInterface): Promise<void> {
 
   for (const prod of products) {
     await db.runAsync(
-      "INSERT OR IGNORE INTO products (id, name, price, categoryId, stockStatus, quantity, showOnKiosk, sku, vatRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      prod.id, prod.name, prod.price, prod.categoryId, "i_lager", 30, 1, "", 25
+      "INSERT OR IGNORE INTO products (id, kioskId, name, price, categoryId, stockStatus, quantity, showOnKiosk, sku, vatRate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      prod.id, kioskId, prod.name, prod.price, prod.categoryId, "i_lager", 30, 1, "", 25
     );
   }
 

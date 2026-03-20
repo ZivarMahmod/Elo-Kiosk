@@ -79,5 +79,22 @@ export async function clearLicenseData(): Promise<void> {
   await AsyncStorage.multiRemove([LICENSE_KEY, TENANT_KEY, KIOSK_KEY]);
 }
 
+/**
+ * Get the active kiosk ID — used by all CRUD operations for data isolation.
+ * Returns empty string if not activated (seed data fallback).
+ */
+let _cachedKioskId: string | null = null;
+
+export async function getActiveKioskId(): Promise<string> {
+  if (_cachedKioskId !== null) return _cachedKioskId;
+  const kioskId = await AsyncStorage.getItem(KIOSK_KEY);
+  _cachedKioskId = kioskId || "";
+  return _cachedKioskId;
+}
+
+export function clearKioskIdCache(): void {
+  _cachedKioskId = null;
+}
+
 export { pb, PB_URL };
 export default pb;
