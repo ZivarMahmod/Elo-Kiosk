@@ -63,7 +63,7 @@ export default function ActivateScreen() {
         );
         // Update the kiosk with device info
         kiosk = await pb.collection("kiosks").update(kiosk.id, {
-          status: "online",
+          status: "active",
           lastSeen: new Date().toISOString(),
         });
       } catch {
@@ -72,7 +72,7 @@ export default function ActivateScreen() {
           tenantId: license.tenantId,
           name: `Kiosk ${trimmed.slice(-4)}`,
           licenseKey: trimmed,
-          status: "online",
+          status: "active",
           lastSeen: new Date().toISOString(),
         });
       }
