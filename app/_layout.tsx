@@ -7,9 +7,19 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import { useDatabase } from "@/hooks/useDatabase";
+import { useAuth } from "@/hooks/useAuth";
+import { startHeartbeat, stopHeartbeat } from "@/core/sync/heartbeat";
 
 export default function RootLayout() {
   const { isReady, error } = useDatabase();
+  const { isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    if (isReady && isAuthenticated) {
+      startHeartbeat();
+    }
+    return () => stopHeartbeat();
+  }, [isReady, isAuthenticated]);
 
   if (error) {
     return (
