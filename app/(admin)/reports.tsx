@@ -4,14 +4,14 @@
  */
 
 import { useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useReceipts } from "@/hooks/useReceipts";
 import { useProducts } from "@/hooks/useProducts";
 import { useCategories } from "@/hooks/useCategories";
 
 type Period = "today" | "7days" | "30days" | "90days" | "year" | "all";
-type Tab = "overview" | "products" | "detailed";
+type Tab = "overview" | "products" | "hourly" | "payments" | "detailed";
 
 const PERIOD_LABELS: Record<Period, string> = {
   today: "Idag",
@@ -171,12 +171,33 @@ export default function ReportsPage() {
     };
   }, [filtered]);
 
-  // Export CSV
+  // Export CSV — download on web, copy to clipboard on native
   const handleExportCSV = () => {
     const header = "Datum,Tid,KvittoNr,Total,Betalning,Status";
     const rows = filtered.map((r) => `${r.datum},${r.tid},${r.kvittoNummer},${r.total},${r.betalning},${r.status}`);
     const csv = [header, ...rows].join("\n");
-    Alert.alert("CSV Export", `${filtered.length} rader redo. I produktion sparas detta som fil.`);
+
+    if (Platform.OS === "web") {
+      try {
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `rapport-${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        Alert.alert("Exporterad", `${filtered.length} rader nedladdade som CSV.`);
+      } catch {
+        Alert.alert("Fel", "Kunde inte exportera CSV.");
+      }
+    } else {
+      // Native: copy to clipboard as fallback
+      import("react-native").then(({ Clipboard }) => {
+        // @ts-ignore — Clipboard deprecated but available
+        Clipboard?.setString?.(csv);
+      }).catch(() => {});
+      Alert.alert("CSV kopierad", `${filtered.length} rader kopierade till urklipp.\n\nKlistra in i en textfil och spara som .csv`);
+    }
   };
 
   const ABC_COLORS: Record<string, string> = { A: "#22c55e", B: "#f59e0b", C: "#ef4444" };
@@ -216,7 +237,7 @@ export default function ReportsPage() {
 
       {/* Tab selector */}
       <View style={styles.tabRow}>
-        {([["overview", "Diagram"], ["products", "Produkter"], ["detailed", "Detaljrapporter"]] as [Tab, string][]).map(([t, label]) => (
+        {([["overview", "Översikt"], ["products", "Produkter"], ["hourly", "Timvis"], ["payments", "Betalning"], ["detailed", "Moms & Returer"]] as [Tab, string][]).map(([t, label]) => (
           <TouchableOpacity
             key={t}
             style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
@@ -285,23 +306,6 @@ export default function ReportsPage() {
             )}
           </View>
 
-          {/* Hourly heatmap */}
-          <Text style={styles.sectionTitle}>🕐 Timvis försäljning</Text>
-          <View style={styles.chartCard}>
-            <View style={styles.heatmapGrid}>
-              {hourlySales.map((val, hour) => {
-                const intensity = val / maxHourly;
-                const bg = intensity === 0 ? "#f5f5f5" : `rgba(45, 107, 90, ${Math.max(intensity, 0.15)})`;
-                return (
-                  <View key={hour} style={[styles.heatCell, { backgroundColor: bg }]}>
-                    <Text style={[styles.heatHour, { color: intensity > 0.5 ? "#fff" : "#666" }]}>{hour}</Text>
-                    {val > 0 && <Text style={[styles.heatVal, { color: intensity > 0.5 ? "#fff" : "#333" }]}>{val}</Text>}
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-
           {/* Category distribution */}
           <Text style={styles.sectionTitle}>📂 Kategorifördelning</Text>
           <View style={styles.chartCard}>
@@ -325,7 +329,33 @@ export default function ReportsPage() {
               })
             )}
           </View>
+        </>
+      )}
 
+      {tab === "hourly" && (
+        <>
+          {/* Hourly heatmap */}
+          <Text style={styles.sectionTitle}>🕐 Timvis försäljning</Text>
+          <View style={styles.chartCard}>
+            <View style={styles.heatmapGrid}>
+              {hourlySales.map((val, hour) => {
+                const intensity = val / maxHourly;
+                const bg = intensity === 0 ? "#f5f5f5" : `rgba(45, 107, 90, ${Math.max(intensity, 0.15)})`;
+                return (
+                  <View key={hour} style={[styles.heatCell, { backgroundColor: bg }]}>
+                    <Text style={[styles.heatHour, { color: intensity > 0.5 ? "#fff" : "#666" }]}>{hour}</Text>
+                    {val > 0 && <Text style={[styles.heatVal, { color: intensity > 0.5 ? "#fff" : "#333" }]}>{val}</Text>}
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+
+        </>
+      )}
+
+      {tab === "payments" && (
+        <>
           {/* Payment methods */}
           <Text style={styles.sectionTitle}>💳 Betalmetoder</Text>
           <View style={styles.chartCard}>

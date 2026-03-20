@@ -3,7 +3,7 @@
     "name": "Elo Kiosk",
     "slug": "elo-kiosk",
     "version": "1.0.0",
-    "orientation": "landscape",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "scheme": "elo-kiosk",
     "userInterfaceStyle": "automatic",
@@ -18,14 +18,30 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#2c3e35"
       },
-      "package": "com.elokiosk.app"
+      "package": "com.elokiosk.app",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.VIBRATE"
+      ],
+      "allowBackup": false,
+      "softwareKeyboardLayoutMode": "pan"
+    },
+    "ios": {
+      "bundleIdentifier": "com.elokiosk.app",
+      "supportsTablet": true
     },
     "plugins": [
       "expo-router",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "elo-kiosk"
+      }
     }
   }
 }

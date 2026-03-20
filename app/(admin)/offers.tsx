@@ -5,7 +5,7 @@
 import { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Modal, Alert,
+  TextInput, Modal, Alert, Switch,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { getAllOffers, createOffer, deleteOffer } from "@/core/database/offers";
@@ -18,6 +18,9 @@ export default function OffersPage() {
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
   const [discount, setDiscount] = useState("");
+  const [isMain, setIsMain] = useState(false);
+  const [editOffer, setEditOffer] = useState<Offer | null>(null);
+  const [search, setSearch] = useState("");
 
   const refresh = async () => {
     const data = await getAllOffers();
@@ -26,6 +29,18 @@ export default function OffersPage() {
 
   useEffect(() => { refresh(); }, []);
 
+  const openAdd = () => {
+    setEditOffer(null);
+    setTitle(""); setDescription(""); setPrice(""); setDiscount(""); setIsMain(false);
+    setShowForm(true);
+  };
+
+  const openEdit = (o: Offer) => {
+    setEditOffer(o);
+    setTitle(o.title); setDescription(o.description || ""); setPrice(String(o.offerPrice)); setDiscount(String(o.discount || 0)); setIsMain(o.isMainOffer || false);
+    setShowForm(true);
+  };
+
   const handleSave = async () => {
     if (!title.trim()) return;
     await createOffer({
@@ -33,11 +48,15 @@ export default function OffersPage() {
       description: description.trim(),
       offerPrice: Number(price) || 0,
       discount: Number(discount) || 0,
+      isMainOffer: isMain,
     });
-    setTitle(""); setDescription(""); setPrice(""); setDiscount("");
     setShowForm(false);
     await refresh();
   };
+
+  const filteredOffers = offers.filter((o) =>
+    search ? o.title.toLowerCase().includes(search.toLowerCase()) : true
+  );
 
   const handleDelete = (o: Offer) => {
     Alert.alert("Ta bort", `Vill du ta bort "${o.title}"?`, [
@@ -53,23 +72,37 @@ export default function OffersPage() {
           <Text style={styles.title}>Erbjudanden</Text>
           <Text style={styles.subtitle}>{offers.length} erbjudanden</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={openAdd}>
           <Ionicons name="add" size={20} color="#fff" />
           <Text style={styles.addBtnText}>Nytt erbjudande</Text>
         </TouchableOpacity>
       </View>
 
+      {/* Search */}
+      <View style={styles.searchRow}>
+        <Ionicons name="search-outline" size={16} color="#8a9b93" />
+        <TextInput style={styles.searchInput} value={search} onChangeText={setSearch} placeholder="Sök erbjudanden..." placeholderTextColor="#b0b8b3" />
+      </View>
+
       <ScrollView contentContainerStyle={styles.grid}>
-        {offers.length === 0 ? (
+        {filteredOffers.length === 0 ? (
           <Text style={styles.emptyText}>Inga erbjudanden skapade</Text>
         ) : (
-          offers.map((o) => (
+          filteredOffers.map((o) => (
             <View key={o.id} style={styles.card}>
               <View style={styles.cardTop}>
-                <View style={styles.dealBadge}><Text style={styles.dealBadgeText}>DEAL</Text></View>
-                <TouchableOpacity onPress={() => handleDelete(o)}>
-                  <Ionicons name="trash-outline" size={18} color="#c44040" />
-                </TouchableOpacity>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  <View style={styles.dealBadge}><Text style={styles.dealBadgeText}>DEAL</Text></View>
+                  {o.isMainOffer && <View style={[styles.dealBadge, { backgroundColor: "#2d6b5a20" }]}><Text style={[styles.dealBadgeText, { color: "#2d6b5a" }]}>HUVUD</Text></View>}
+                </View>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TouchableOpacity onPress={() => openEdit(o)}>
+                    <Ionicons name="create-outline" size={18} color="#5b8fa8" />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleDelete(o)}>
+                    <Ionicons name="trash-outline" size={18} color="#c44040" />
+                  </TouchableOpacity>
+                </View>
               </View>
               <Text style={styles.cardTitle}>{o.title}</Text>
               <Text style={styles.cardDesc}>{o.description}</Text>
@@ -105,6 +138,18 @@ export default function OffersPage() {
                 <TextInput style={styles.formInput} value={discount} onChangeText={setDiscount} keyboardType="numeric" placeholder="0" />
               </View>
             </View>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <View>
+                <Text style={styles.formLabel}>Huvuderbjudande</Text>
+                <Text style={{ fontSize: 11, color: "#8a9b93" }}>Visas som första erbjudandet på kiosken</Text>
+              </View>
+              <Switch
+                value={isMain}
+                onValueChange={setIsMain}
+                trackColor={{ false: "#d1d5db", true: "#2d6b5a40" }}
+                thumbColor={isMain ? "#2d6b5a" : "#f4f3f4"}
+              />
+            </View>
             <View style={styles.formActions}>
               <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowForm(false)}>
                 <Text style={styles.cancelBtnText}>Avbryt</Text>
@@ -127,6 +172,8 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 14, color: "#6b7c74" },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#2d6b5a", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10 },
   addBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+  searchRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fff", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 16, borderWidth: 1, borderColor: "#e5e7eb" },
+  searchInput: { flex: 1, fontSize: 14, color: "#2c3e35" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 14, paddingBottom: 24 },
   emptyText: { fontSize: 14, color: "#8a9b93", fontStyle: "italic", padding: 20 },
   card: { width: "31%", backgroundColor: "#fdf8f0", borderWidth: 1, borderColor: "#e8c87a", borderRadius: 14, padding: 16 },

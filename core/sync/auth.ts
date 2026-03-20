@@ -1,104 +1,96 @@
 /**
- * Authentication system
- * Simple email/password stored locally with kioskId generation
+ * Authentication system — PocketBase cloud auth
+ * Logs in against PocketBase users collection, fetches linked kiosk,
+ * persists token via AsyncStorage.
+ *
+ * Exports the same interface as before so hooks/useAuth.ts is unchanged.
  */
 
-import { getDatabase, generateId } from "../database/db";
-import type { AuthState, KioskIdentity } from "../types/kiosk";
+import pb, {
+  saveAuthStore,
+  loadAuthStore,
+  clearAuthStore,
+  getLicenseData,
+  clearLicenseData,
+} from "./pocketbase";
+import type { AuthState } from "../types/kiosk";
 
 /**
- * Hash a password (simple hash for local use — not crypto-grade)
+ * Initialize auth — must be called once at app startup
+ * Restores any previously saved PocketBase token
  */
-function hashPassword(password: string): string {
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return `local_${Math.abs(hash).toString(36)}`;
+export async function initAuth(): Promise<void> {
+  await loadAuthStore();
 }
 
 /**
- * Generate a unique kiosk ID
- */
-function generateKioskId(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let id = "EK-";
-  for (let i = 0; i < 6; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return id;
-}
-
-/**
- * Register or login with email/password
- * Creates a new kiosk identity if none exists for that email
+ * Login with email/password against PocketBase users collection
+ * Keeps the same return shape as the old local auth.
  */
 export async function loginOrRegister(
   email: string,
   password: string
 ): Promise<{ success: boolean; kioskId?: string; error?: string }> {
-  const db = await getDatabase();
   const normalizedEmail = email.toLowerCase().trim();
 
   if (!normalizedEmail || !password) {
     return { success: false, error: "E-post och lösenord krävs" };
   }
 
-  const pwHash = hashPassword(password);
+  try {
+    // Authenticate against PocketBase
+    await pb.collection("users").authWithPassword(normalizedEmail, password);
+    await saveAuthStore();
 
-  // Check if account exists
-  const existing = await db.getFirstAsync<KioskIdentity>(
-    "SELECT * FROM kiosk_identity WHERE accountEmail = ?",
-    normalizedEmail
-  );
+    // Try to find a kiosk linked to this user's tenant
+    const license = await getLicenseData();
+    const kioskId = license.kioskId ?? undefined;
 
-  if (existing) {
-    // Verify password
-    if (existing.passwordHash !== pwHash) {
-      return { success: false, error: "Fel lösenord" };
+    return { success: true, kioskId };
+  } catch (err: any) {
+    console.error("[Auth] PocketBase login failed:", err);
+
+    // Map PocketBase errors to Swedish messages
+    if (err?.status === 400) {
+      return { success: false, error: "Fel e-post eller lösenord" };
     }
-    return { success: true, kioskId: existing.kioskId };
+    if (err?.status === 0 || err?.message?.includes("fetch")) {
+      return { success: false, error: "Kunde inte ansluta till servern" };
+    }
+
+    return { success: false, error: "Inloggningen misslyckades" };
   }
-
-  // Create new account
-  const id = generateId("auth");
-  const kioskId = generateKioskId();
-  const now = new Date().toISOString();
-
-  await db.runAsync(
-    "INSERT INTO kiosk_identity (id, kioskId, accountEmail, passwordHash, linkedAt) VALUES (?, ?, ?, ?, ?)",
-    id, kioskId, normalizedEmail, pwHash, now
-  );
-
-  return { success: true, kioskId };
 }
 
 /**
- * Get the current auth state (checks if any account is linked)
+ * Get the current auth state
+ * Checks PocketBase auth store + local license data
  */
 export async function getAuthState(): Promise<AuthState> {
-  const db = await getDatabase();
-  const row = await db.getFirstAsync<KioskIdentity>(
-    "SELECT * FROM kiosk_identity LIMIT 1"
-  );
+  // Ensure token is loaded from storage
+  if (!pb.authStore.token) {
+    await loadAuthStore();
+  }
 
-  if (!row) {
+  const isValid = pb.authStore.isValid;
+  const record = pb.authStore.record;
+  const license = await getLicenseData();
+
+  if (!isValid || !record) {
     return { isAuthenticated: false, email: null, kioskId: null };
   }
 
   return {
     isAuthenticated: true,
-    email: row.accountEmail,
-    kioskId: row.kioskId,
+    email: record.email ?? null,
+    kioskId: license.kioskId ?? null,
   };
 }
 
 /**
- * Logout — removes kiosk identity
+ * Logout — clears PocketBase auth + license data
  */
 export async function logout(): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync("DELETE FROM kiosk_identity");
+  await clearAuthStore();
+  await clearLicenseData();
 }

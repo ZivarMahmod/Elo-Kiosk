@@ -46,15 +46,46 @@ export default function WishesPage() {
           <Text style={styles.title}>Kundönskemål</Text>
           <Text style={styles.subtitle}>{wishes.length} önskemål</Text>
         </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(true)}>
-          <Ionicons name="add" size={20} color="#fff" />
-          <Text style={styles.addBtnText}>Lägg till</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          {wishes.length > 0 && (
+            <TouchableOpacity
+              style={[styles.addBtn, { backgroundColor: "#e74c3c" }]}
+              onPress={() => {
+                Alert.alert(
+                  "Rensa alla önskemål",
+                  `Är du säker på att du vill ta bort alla ${wishes.length} önskemål? Detta kan inte ångras.`,
+                  [
+                    { text: "Avbryt" },
+                    {
+                      text: `Rensa ${wishes.length} st`,
+                      style: "destructive",
+                      onPress: async () => {
+                        for (const w of wishes) { await deleteWish(w.id); }
+                        await refresh();
+                      },
+                    },
+                  ]
+                );
+              }}
+            >
+              <Ionicons name="trash-outline" size={16} color="#fff" />
+              <Text style={styles.addBtnText}>Rensa alla ({wishes.length})</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(true)}>
+            <Ionicons name="add" size={20} color="#fff" />
+            <Text style={styles.addBtnText}>Lägg till</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.list}>
         {wishes.length === 0 ? (
-          <Text style={styles.emptyText}>Inga önskemål registrerade</Text>
+          <View style={{ alignItems: "center", paddingVertical: 40 }}>
+            <Ionicons name="heart-outline" size={48} color="#d1d5db" />
+            <Text style={{ fontSize: 16, fontWeight: "600", color: "#2c3e35", marginTop: 12 }}>Inga önskemål ännu</Text>
+            <Text style={styles.emptyText}>Kundernas önskemål visas här</Text>
+          </View>
         ) : (
           wishes.map((w) => (
             <View key={w.id} style={styles.card}>

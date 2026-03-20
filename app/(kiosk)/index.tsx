@@ -1,25 +1,14 @@
 /**
- * KIOSK VIEW — Customer-facing screen
- * 1920x1080 landscape layout based on existing kiosk app
- *
- * Layout:
- * +------------------------------------------+
- * | TOP BAR (52px) - Store name + hint       |
- * +------------------------+-----------------+
- * | MAIN CONTENT           | CART SIDEBAR    |
- * | (Categories/Products)  | (380px)         |
- * +------------------------+-----------------+
+ * KIOSK VIEW — Premium customer-facing screen
+ * All admin settings are wired up and have real effects
+ * Dynamic theming, tipping, payment methods, pause mode, emergency, etc.
  */
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Modal,
+  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  ActivityIndicator, Modal, TextInput, Alert, Animated,
+  useWindowDimensions,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -31,8 +20,11 @@ import { createReceipt } from "@/core/database/receipts";
 import type { Offer } from "@/core/types/offer";
 import type { Product } from "@/core/types/product";
 import type { Category } from "@/core/types/category";
+import QRCode from "react-native-qrcode-svg";
+import { enterKioskMode } from "@/core/kiosk/android-kiosk";
 
 type KioskView = "overview" | "category";
+type PayMethod = "swish" | "card" | "cash";
 
 interface CartItem {
   productId: string;
@@ -43,6 +35,7 @@ interface CartItem {
 
 export default function KioskScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
   const { categories, loading: catLoading } = useCategories(true);
   const { products, loading: prodLoading, getByCategory } = useProducts(true);
   const { settings } = useSettings();
@@ -57,24 +50,73 @@ export default function KioskScreen() {
   const [showPayment, setShowPayment] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [receiptId, setReceiptId] = useState("");
-  const [countdown, setCountdown] = useState(15);
+  const [countdown, setCountdown] = useState(20);
+  const [selectedPayMethod, setSelectedPayMethod] = useState<PayMethod>("swish");
+  const [selectedTip, setSelectedTip] = useState(0);
+  const [queueNumber, setQueueNumber] = useState("");
+
+  // Admin exit
+  const [showAdminAuth, setShowAdminAuth] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
 
   // Screensaver
   const [showScreensaver, setShowScreensaver] = useState(false);
   const screensaverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load offers
+  // Session timeout
+  const sessionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Bubble animation
+  const bubbleAnim = useRef(new Animated.Value(0)).current;
+
+  // ═══ DYNAMIC THEME from settings ═══
+  const theme = useMemo(() => ({
+    primary: settings.primaryColor || "#2d6b5a",
+    secondary: settings.secondaryColor || "#d4a574",
+    accent: settings.accentColor || "#f5a623",
+    bg: settings.backgroundColor || "#ffffff",
+    text: settings.textColor || "#1a1a1a",
+    radius: settings.buttonRadius || 8,
+    fontSize: settings.largeTextMode ? 1.25 : 1,
+    highContrast: settings.highContrast,
+    perRow: settings.productsPerRow || 3,
+  }), [settings]);
+
+  // ═══ KIOSK MODE ═══
+  useEffect(() => {
+    if (settings.kioskLocked) {
+      const cleanup = enterKioskMode();
+      return cleanup;
+    }
+  }, [settings.kioskLocked]);
+
+  // ═══ OFFERS ═══
   useEffect(() => {
     if (settings.offersEnabled) {
       getAllOffers().then(setOffers).catch(console.error);
+    } else {
+      setOffers([]);
     }
   }, [settings.offersEnabled]);
 
-  // Cart calculations
-  const totalItems = useMemo(() => cart.reduce((sum, i) => sum + i.qty, 0), [cart]);
-  const total = useMemo(() => cart.reduce((sum, i) => sum + i.price * i.qty, 0), [cart]);
+  // ═══ BUBBLE ANIMATION ═══
+  useEffect(() => {
+    if (settings.bubbleVisible && settings.animationsEnabled) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(bubbleAnim, { toValue: 1, duration: 2000, useNativeDriver: true }),
+          Animated.timing(bubbleAnim, { toValue: 0, duration: 2000, useNativeDriver: true }),
+        ])
+      ).start();
+    }
+  }, [settings.bubbleVisible, settings.animationsEnabled]);
 
-  // Screensaver timer
+  // ═══ CART ═══
+  const totalItems = useMemo(() => cart.reduce((sum, i) => sum + i.qty, 0), [cart]);
+  const subtotal = useMemo(() => cart.reduce((sum, i) => sum + i.price * i.qty, 0), [cart]);
+  const total = subtotal + selectedTip;
+
+  // ═══ SCREENSAVER TIMER ═══
   const resetScreensaverTimer = useCallback(() => {
     setShowScreensaver(false);
     if (screensaverTimer.current) clearTimeout(screensaverTimer.current);
@@ -82,14 +124,36 @@ export default function KioskScreen() {
     screensaverTimer.current = setTimeout(() => {
       if (settings.screensaverEnabled) setShowScreensaver(true);
     }, delay);
-  }, [settings.screensaverDelay, settings.screensaverEnabled]);
+    // Session timeout
+    if (sessionTimer.current) clearTimeout(sessionTimer.current);
+    sessionTimer.current = setTimeout(() => {
+      if (cart.length > 0) {
+        setCart([]);
+        setCurrentView("overview");
+        setSelectedCategory(null);
+      }
+    }, (settings.sessionTimeout || 30) * 60 * 1000);
+  }, [settings.screensaverDelay, settings.screensaverEnabled, settings.sessionTimeout, cart.length]);
 
   useEffect(() => {
     resetScreensaverTimer();
-    return () => { if (screensaverTimer.current) clearTimeout(screensaverTimer.current); };
+    return () => {
+      if (screensaverTimer.current) clearTimeout(screensaverTimer.current);
+      if (sessionTimer.current) clearTimeout(sessionTimer.current);
+    };
   }, [resetScreensaverTimer]);
 
-  // Navigation
+  // ═══ AVAILABLE PAYMENT METHODS ═══
+  const payMethods = useMemo(() => {
+    const methods: { key: PayMethod; label: string; icon: string }[] = [];
+    if (settings.paymentSwish) methods.push({ key: "swish", label: "Swish", icon: "phone-portrait-outline" });
+    if (settings.paymentCard) methods.push({ key: "card", label: "Kort", icon: "card-outline" });
+    if (settings.paymentCash) methods.push({ key: "cash", label: "Kontant", icon: "cash-outline" });
+    if (methods.length === 0) methods.push({ key: "swish", label: "Swish", icon: "phone-portrait-outline" });
+    return methods;
+  }, [settings.paymentSwish, settings.paymentCard, settings.paymentCash]);
+
+  // ═══ NAVIGATION ═══
   const openCategory = async (cat: Category) => {
     setSelectedCategory(cat);
     const prods = await getByCategory(cat.id);
@@ -104,40 +168,47 @@ export default function KioskScreen() {
     resetScreensaverTimer();
   };
 
-  // Cart operations
+  // ═══ CART OPERATIONS ═══
   const addToCart = (product: Product) => {
     setCart((prev) => {
       const existing = prev.find((i) => i.productId === product.id);
-      if (existing) {
-        return prev.map((i) =>
-          i.productId === product.id ? { ...i, qty: i.qty + 1 } : i
-        );
-      }
+      if (existing) return prev.map((i) => i.productId === product.id ? { ...i, qty: i.qty + 1 } : i);
       return [...prev, { productId: product.id, name: product.name, price: product.campaignPrice ?? product.price, qty: 1 }];
     });
     resetScreensaverTimer();
   };
 
   const updateQty = (productId: string, delta: number) => {
-    setCart((prev) => {
-      return prev
-        .map((i) => i.productId === productId ? { ...i, qty: Math.max(0, i.qty + delta) } : i)
-        .filter((i) => i.qty > 0);
-    });
+    setCart((prev) => prev.map((i) => i.productId === productId ? { ...i, qty: Math.max(0, i.qty + delta) } : i).filter((i) => i.qty > 0));
     resetScreensaverTimer();
   };
 
-  const clearCart = () => setCart([]);
-
+  const clearCart = () => { setCart([]); setSelectedTip(0); };
   const getQty = (productId: string) => cart.find((i) => i.productId === productId)?.qty ?? 0;
 
-  // Payment
+  // ═══ GENERATE QUEUE NUMBER ═══
+  const generateQueueNumber = () => {
+    const fmt = settings.orderQueueFormat || "EK-####";
+    const num = String(Date.now()).slice(-4);
+    return fmt.replace(/#+/g, (match: string) => num.slice(-match.length).padStart(match.length, "0"));
+  };
+
+  // ═══ PAYMENT ═══
   const handlePay = () => {
-    if (total <= 0) return;
+    if (subtotal <= 0) return;
+    if (settings.ordersPaused) {
+      Alert.alert("Beställningar pausade", settings.pauseMessage || "Vi tar en kort paus. Försök igen snart!");
+      return;
+    }
     const id = `${settings.receiptPrefix || "EK"}-${String(Date.now()).slice(-4)}`;
     setReceiptId(id);
-    setCountdown(15);
+    setSelectedTip(0);
+    setSelectedPayMethod(payMethods[0]?.key || "swish");
+    setCountdown(20);
     setShowPayment(true);
+    if (settings.orderQueueEnabled) {
+      setQueueNumber(generateQueueNumber());
+    }
     resetScreensaverTimer();
   };
 
@@ -157,14 +228,14 @@ export default function KioskScreen() {
         total,
         status: "ej_registrerad",
         tagged: false,
-        betalning: "Swish",
+        betalning: selectedPayMethod === "swish" ? "Swish" : selectedPayMethod === "card" ? "Kort" : "Kontant",
       });
     } catch (err) {
       console.error("[Kiosk] Receipt error:", err);
     }
     setShowPayment(false);
     setShowReceipt(true);
-    setCountdown(15);
+    setCountdown(20);
   };
 
   const handleCloseReceipt = () => {
@@ -173,7 +244,7 @@ export default function KioskScreen() {
     goHome();
   };
 
-  // Countdown
+  // ═══ COUNTDOWN ═══
   useEffect(() => {
     if (!showPayment && !showReceipt) return;
     if (countdown <= 0) {
@@ -185,52 +256,108 @@ export default function KioskScreen() {
     return () => clearTimeout(timer);
   }, [countdown, showPayment, showReceipt]);
 
-  // Loading
+  // ═══ PRODUCT CARD WIDTH ═══
+  const productWidth = useMemo(() => {
+    const cols = theme.perRow || 3;
+    const pct = Math.floor(100 / cols) - 2;
+    return `${pct}%` as any;
+  }, [theme.perRow]);
+
+  // ═══ LOADING ═══
   if (catLoading || prodLoading) {
     return (
-      <View style={s.loadingContainer}>
-        <ActivityIndicator size="large" color="#2c3e35" />
-        <Text style={s.loadingText}>Laddar sortiment...</Text>
+      <View style={[ds.loadingContainer, { backgroundColor: theme.bg }]}>
+        <ActivityIndicator size="large" color={theme.primary} />
+        <Text style={[ds.loadingText, { color: theme.text + "80", fontSize: 18 * theme.fontSize }]}>Laddar sortiment...</Text>
+      </View>
+    );
+  }
+
+  // ═══ ORDERS PAUSED OVERLAY ═══
+  if (settings.ordersPaused && cart.length === 0) {
+    return (
+      <View style={[ds.pauseOverlay, { backgroundColor: theme.bg }]} onTouchStart={resetScreensaverTimer}>
+        <View style={ds.pauseCard}>
+          <Ionicons name="pause-circle" size={64} color={theme.accent} />
+          <Text style={[ds.pauseTitle, { color: theme.text }]}>Beställningar pausade</Text>
+          <Text style={[ds.pauseMsg, { color: theme.text + "80" }]}>{settings.pauseMessage || "Vi tar en kort paus. Vi är snart tillbaka!"}</Text>
+        </View>
+        <TouchableOpacity style={ds.exitBtn} onPress={() => {
+          if (settings.kioskLocked && settings.kioskPassword) { setShowAdminAuth(true); setAdminPassword(""); }
+          else router.replace("/mode-select");
+        }}>
+          <Ionicons name="exit-outline" size={18} color="#6b7c74" />
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={s.stage} onTouchStart={resetScreensaverTimer}>
-      {/* TOP BAR */}
-      <View style={s.topBar}>
-        <Text style={s.topBarTitle}>{settings.storeName || "Elo Kiosk"}</Text>
-        <View style={s.topBarRight}>
-          <Text style={s.topBarHint}>VÄLJ &rarr; LÄGG I VAGNEN &rarr; BETALA</Text>
-          <TouchableOpacity
-            style={s.exitBtn}
-            onPress={() => router.replace("/mode-select")}
-          >
+    <View style={[ds.stage, { backgroundColor: "#e8f0ec" }]} onTouchStart={resetScreensaverTimer}>
+      {/* ═══ EMERGENCY MESSAGE ═══ */}
+      {settings.emergencyMessage ? (
+        <View style={ds.emergencyBar}>
+          <Ionicons name="warning" size={16} color="#fff" />
+          <Text style={ds.emergencyText}>{settings.emergencyMessage}</Text>
+        </View>
+      ) : null}
+
+      {/* ═══ TOP BAR ═══ */}
+      <View style={[ds.topBar, { borderRadius: 0 }]}>
+        <Text style={[ds.topBarTitle, { color: theme.text, fontSize: 28 * theme.fontSize }]}>{settings.storeName || "Elo Kiosk"}</Text>
+        <View style={ds.topBarRight}>
+          <Text style={[ds.topBarHint, { fontSize: 12 * theme.fontSize }]}>VÄLJ → LÄGG I VAGNEN → BETALA</Text>
+          <TouchableOpacity style={ds.exitBtnSmall} onPress={() => {
+            if (settings.kioskLocked && settings.kioskPassword) { setShowAdminAuth(true); setAdminPassword(""); }
+            else router.replace("/mode-select");
+          }}>
             <Ionicons name="exit-outline" size={18} color="#6b7c74" />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* BODY */}
-      <View style={s.body}>
-        {/* MAIN */}
-        <View style={s.mainContent}>
+      {/* ═══ BODY ═══ */}
+      <View style={ds.body}>
+        {/* MAIN CONTENT */}
+        <View style={ds.mainContent}>
           {currentView === "overview" ? (
-            <ScrollView style={s.overviewScroll} contentContainerStyle={s.overviewContent}>
-              <Text style={s.sectionLabel}>TRYCK PÅ EN KATEGORI</Text>
-              <Text style={s.sectionTitle}>Vad tar du idag?</Text>
+            <ScrollView style={ds.overviewScroll} contentContainerStyle={ds.overviewContent}>
+              {/* Welcome text */}
+              {settings.welcomeText ? (
+                <Text style={[ds.welcomeText, { color: theme.text + "60", fontSize: 14 * theme.fontSize }]}>{settings.welcomeText}</Text>
+              ) : null}
 
-              <View style={s.catGrid}>
+              <Text style={[ds.sectionLabel, { fontSize: 12 * theme.fontSize }]}>TRYCK PÅ EN KATEGORI</Text>
+              <Text style={[ds.sectionTitle, { color: theme.text, fontSize: 38 * theme.fontSize }]}>Vad tar du idag?</Text>
+
+              {/* Info bubble */}
+              {settings.bubbleVisible && (settings.bubbleText1 || settings.bubbleText2) && (
+                <Animated.View style={[ds.bubble, { backgroundColor: theme.primary + "15", borderColor: theme.primary + "30",
+                  transform: [{ translateY: bubbleAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -6] }) }]
+                }]}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={20} color={theme.primary} />
+                  <View>
+                    {settings.bubbleText1 ? <Text style={[ds.bubbleText, { color: theme.primary, fontSize: 14 * theme.fontSize }]}>{settings.bubbleText1}</Text> : null}
+                    {settings.bubbleText2 ? <Text style={[ds.bubbleSubtext, { color: theme.primary + "90", fontSize: 12 * theme.fontSize }]}>{settings.bubbleText2}</Text> : null}
+                  </View>
+                </Animated.View>
+              )}
+
+              {/* Category grid */}
+              <View style={ds.catGrid}>
                 {categories.map((cat) => (
                   <TouchableOpacity
                     key={cat.id}
-                    style={[s.catCard, { backgroundColor: cat.color || "#d5ddd8" }]}
+                    style={[ds.catCard, {
+                      backgroundColor: cat.color || "#d5ddd8",
+                      borderRadius: theme.radius + 8,
+                    }]}
                     onPress={() => openCategory(cat)}
-                    activeOpacity={0.8}
+                    activeOpacity={0.85}
                   >
-                    <Text style={s.catEmoji}>{cat.emoji || "\uD83D\uDED2"}</Text>
-                    <Text style={s.catName}>{cat.name}</Text>
-                    <Text style={s.catSub}>{cat.subtitle || ""}</Text>
+                    <Text style={ds.catEmoji}>{cat.emoji || "🛒"}</Text>
+                    <Text style={[ds.catName, { fontSize: 24 * theme.fontSize }]}>{cat.name}</Text>
+                    <Text style={[ds.catSub, { fontSize: 13 * theme.fontSize }]}>{cat.subtitle || ""}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -238,16 +365,14 @@ export default function KioskScreen() {
               {/* Offers */}
               {settings.offersEnabled && offers.length > 0 && (
                 <>
-                  <Text style={s.offersTitle}>Just nu</Text>
-                  <View style={s.offersGrid}>
+                  <Text style={[ds.offersTitle, { color: theme.text, fontSize: 28 * theme.fontSize }]}>Just nu</Text>
+                  <View style={ds.offersGrid}>
                     {offers.map((offer) => (
-                      <View key={offer.id} style={s.offerCard}>
-                        <View style={s.offerInfo}>
-                          <Text style={s.offerLabel}>ERBJUDANDE</Text>
-                          <Text style={s.offerTitle2}>{offer.title}</Text>
-                          <Text style={s.offerDesc}>{offer.description}</Text>
-                          <Text style={s.offerPrice}>{offer.offerPrice} kr</Text>
-                        </View>
+                      <View key={offer.id} style={[ds.offerCard, { borderRadius: theme.radius + 4 }]}>
+                        <View style={ds.offerBadge}><Text style={ds.offerBadgeText}>ERBJUDANDE</Text></View>
+                        <Text style={[ds.offerTitle2, { fontSize: 20 * theme.fontSize }]}>{offer.title}</Text>
+                        <Text style={[ds.offerDesc, { fontSize: 13 * theme.fontSize }]}>{offer.description}</Text>
+                        <Text style={ds.offerPrice}>{offer.offerPrice} kr</Text>
                       </View>
                     ))}
                   </View>
@@ -255,53 +380,54 @@ export default function KioskScreen() {
               )}
             </ScrollView>
           ) : selectedCategory ? (
-            <View style={s.categoryPage}>
-              <View style={s.categoryTop}>
-                <TouchableOpacity style={s.backBtn} onPress={goHome}>
-                  <Text style={s.backBtnText}>&larr; Tillbaka</Text>
+            <View style={ds.categoryPage}>
+              <View style={ds.categoryTop}>
+                <TouchableOpacity style={[ds.backBtn, { borderRadius: theme.radius + 2 }]} onPress={goHome}>
+                  <Ionicons name="arrow-back-outline" size={20} color={theme.text} />
+                  <Text style={[ds.backBtnText, { fontSize: 16 * theme.fontSize }]}>Tillbaka</Text>
                 </TouchableOpacity>
-                <Text style={s.categoryHeading}>
+                <Text style={[ds.categoryHeading, { color: theme.text, fontSize: 30 * theme.fontSize }]}>
                   {selectedCategory.emoji} {selectedCategory.name}
                 </Text>
               </View>
 
-              <ScrollView style={s.productScrollView} contentContainerStyle={s.productGrid}>
+              <ScrollView style={ds.productScrollView} contentContainerStyle={ds.productGrid}>
                 {categoryProducts.map((product) => {
                   const q = getQty(product.id);
                   const displayPrice = product.campaignPrice ?? product.price;
+                  const isOutOfStock = product.stockStatus === "slut" || (product.quantity != null && product.quantity <= 0);
                   return (
-                    <View key={product.id} style={s.productCard}>
-                      <View style={s.productImgBox}>
-                        <Text style={s.productEmoji}>{selectedCategory.emoji || "\uD83D\uDED2"}</Text>
+                    <View key={product.id} style={[ds.productCard, { width: productWidth, borderRadius: theme.radius + 4, opacity: isOutOfStock ? 0.5 : 1 }]}>
+                      <View style={[ds.productImgBox, { backgroundColor: theme.bg }]}>
+                        <Text style={ds.productEmoji}>{selectedCategory.emoji || "🛒"}</Text>
                         {product.badgeLabel ? (
-                          <View style={[s.badge, { backgroundColor: product.badgeColor || "#f5a623" }]}>
-                            <Text style={s.badgeText}>{product.badgeLabel}</Text>
+                          <View style={[ds.badge, { backgroundColor: product.badgeColor || theme.accent, borderRadius: theme.radius }]}>
+                            <Text style={ds.badgeText}>{product.badgeLabel}</Text>
                           </View>
                         ) : null}
+                        {isOutOfStock && (
+                          <View style={ds.outOfStockBadge}><Text style={ds.outOfStockText}>SLUT</Text></View>
+                        )}
                       </View>
-                      <View style={s.productInfoBox}>
-                        <Text style={s.productName}>{product.name}</Text>
-                        <View style={s.priceRow}>
-                          <Text style={s.productPrice}>{displayPrice} kr</Text>
+                      <View style={ds.productInfoBox}>
+                        <Text style={[ds.productName, { color: theme.text, fontSize: 15 * theme.fontSize }]} numberOfLines={2}>{product.name}</Text>
+                        <View style={ds.priceRow}>
+                          <Text style={[ds.productPrice, { color: theme.secondary, fontSize: 15 * theme.fontSize }]}>{displayPrice} kr</Text>
                           {product.campaignPrice != null && product.campaignPrice < product.price && (
-                            <Text style={s.originalPrice}>{product.price} kr</Text>
+                            <Text style={[ds.originalPrice, { fontSize: 12 * theme.fontSize }]}>{product.price} kr</Text>
                           )}
                         </View>
-                        <View style={s.qtyRow}>
-                          <TouchableOpacity
-                            style={[s.qtyBtn, q === 0 && s.qtyBtnDim]}
-                            onPress={() => updateQty(product.id, -1)}
-                          >
-                            <Text style={s.qtyBtnText}>&minus;</Text>
-                          </TouchableOpacity>
-                          <Text style={s.qtyVal}>{q}</Text>
-                          <TouchableOpacity
-                            style={s.qtyBtn}
-                            onPress={() => addToCart(product)}
-                          >
-                            <Text style={s.qtyBtnText}>+</Text>
-                          </TouchableOpacity>
-                        </View>
+                        {!isOutOfStock && (
+                          <View style={ds.qtyRow}>
+                            <TouchableOpacity style={[ds.qtyBtn, { borderRadius: theme.radius }, q === 0 && ds.qtyBtnDim]} onPress={() => updateQty(product.id, -1)}>
+                              <Ionicons name="remove" size={18} color="#5b8fa8" />
+                            </TouchableOpacity>
+                            <Text style={[ds.qtyVal, { color: theme.text, fontSize: 18 * theme.fontSize }]}>{q}</Text>
+                            <TouchableOpacity style={[ds.qtyBtn, { borderRadius: theme.radius, backgroundColor: q > 0 ? theme.primary + "20" : "rgba(91,143,168,0.12)" }]} onPress={() => addToCart(product)}>
+                              <Ionicons name="add" size={18} color={q > 0 ? theme.primary : "#5b8fa8"} />
+                            </TouchableOpacity>
+                          </View>
+                        )}
                       </View>
                     </View>
                   );
@@ -311,269 +437,460 @@ export default function KioskScreen() {
           ) : null}
         </View>
 
-        {/* CART SIDEBAR */}
-        <View style={s.cartPanel}>
-          <ScrollView style={s.cartTop} contentContainerStyle={s.cartTopContent}>
-            <Text style={s.cartTitle}>Valda varor</Text>
+        {/* ═══ CART SIDEBAR ═══ */}
+        <View style={ds.cartPanel}>
+          <ScrollView style={ds.cartTop} contentContainerStyle={ds.cartTopContent}>
+            <Text style={[ds.cartTitle, { color: theme.text, fontSize: 22 * theme.fontSize }]}>Din beställning</Text>
             {cart.length === 0 ? (
-              <Text style={s.cartEmpty}>Inga produkter valda ännu.</Text>
+              <View style={ds.cartEmptyState}>
+                <Ionicons name="cart-outline" size={40} color="#d1d5db" />
+                <Text style={[ds.cartEmpty, { fontSize: 14 * theme.fontSize }]}>Inga produkter valda ännu.</Text>
+              </View>
             ) : (
               cart.map((item) => (
-                <View key={item.productId} style={s.cartItemRow}>
-                  <Text style={s.cartItemName}>{item.qty} x {item.name}</Text>
-                  <Text style={s.cartItemPrice}>{item.price * item.qty} kr</Text>
+                <View key={item.productId} style={ds.cartItemRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[ds.cartItemName, { fontSize: 15 * theme.fontSize }]}>{item.name}</Text>
+                    <Text style={ds.cartItemQty}>{item.qty} st × {item.price} kr</Text>
+                  </View>
+                  <Text style={[ds.cartItemPrice, { fontSize: 15 * theme.fontSize }]}>{item.price * item.qty} kr</Text>
+                  <TouchableOpacity style={ds.cartItemRemove} onPress={() => updateQty(item.productId, -1)}>
+                    <Ionicons name="close-circle-outline" size={18} color="#c4a0a0" />
+                  </TouchableOpacity>
                 </View>
               ))
             )}
           </ScrollView>
 
-          <View style={s.cartBottom}>
-            <View style={s.cartCountRow}>
-              <Text style={s.cartCountLabel}>Antal artiklar</Text>
-              <Text style={s.cartCountVal}>{totalItems}</Text>
+          <View style={ds.cartBottom}>
+            {/* Tipping */}
+            {settings.tippingEnabled && cart.length > 0 && (
+              <View style={ds.tipSection}>
+                <Text style={[ds.tipLabel, { fontSize: 12 * theme.fontSize }]}>Lägg till dricks</Text>
+                <View style={ds.tipRow}>
+                  {[0, settings.tipAmount1 || 10, settings.tipAmount2 || 20, settings.tipAmount3 || 50].map((amount) => (
+                    <TouchableOpacity
+                      key={amount}
+                      style={[ds.tipBtn, {
+                        borderRadius: theme.radius,
+                        backgroundColor: selectedTip === amount ? theme.primary : "#f5f5f5",
+                      }]}
+                      onPress={() => setSelectedTip(amount)}
+                    >
+                      <Text style={[ds.tipBtnText, { color: selectedTip === amount ? "#fff" : theme.text }]}>
+                        {amount === 0 ? "Ingen" : `${amount} kr`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            <View style={ds.cartCountRow}>
+              <Text style={[ds.cartCountLabel, { fontSize: 14 * theme.fontSize }]}>Antal artiklar</Text>
+              <Text style={[ds.cartCountVal, { fontSize: 14 * theme.fontSize }]}>{totalItems}</Text>
             </View>
-            <View style={s.cartTotalRow}>
-              <Text style={s.cartTotalLabel}>Totalt</Text>
-              <Text style={s.cartTotalVal}>{total} kr</Text>
+            {selectedTip > 0 && (
+              <View style={ds.cartCountRow}>
+                <Text style={[ds.cartCountLabel, { fontSize: 14 * theme.fontSize }]}>Dricks</Text>
+                <Text style={[ds.cartCountVal, { color: theme.primary, fontSize: 14 * theme.fontSize }]}>+{selectedTip} kr</Text>
+              </View>
+            )}
+            <View style={ds.cartTotalRow}>
+              <Text style={[ds.cartTotalLabel, { color: theme.text, fontSize: 24 * theme.fontSize }]}>Totalt</Text>
+              <Text style={[ds.cartTotalVal, { color: theme.text, fontSize: 24 * theme.fontSize }]}>{total} kr</Text>
             </View>
 
             <TouchableOpacity
-              style={[s.payBtn, total <= 0 && s.payBtnDisabled]}
+              style={[ds.payBtn, { borderRadius: theme.radius + 2, backgroundColor: theme.primary, opacity: subtotal <= 0 ? 0.35 : 1 }]}
               onPress={handlePay}
-              disabled={total <= 0}
+              disabled={subtotal <= 0}
             >
-              <Text style={s.payBtnText}>Betala med Swish</Text>
+              <Ionicons name="wallet-outline" size={20} color="#fff" />
+              <Text style={[ds.payBtnText, { fontSize: 20 * theme.fontSize }]}>Betala {total > 0 ? `${total} kr` : ""}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[s.clearBtn, total <= 0 && { opacity: 0.3 }]}
+              style={[ds.clearBtn, { borderRadius: theme.radius + 2, opacity: subtotal <= 0 ? 0.3 : 1 }]}
               onPress={clearCart}
-              disabled={total <= 0}
+              disabled={subtotal <= 0}
             >
-              <Text style={s.clearBtnText}>Rensa val</Text>
+              <Text style={[ds.clearBtnText, { fontSize: 14 * theme.fontSize }]}>Rensa val</Text>
             </TouchableOpacity>
           </View>
         </View>
       </View>
 
-      {/* PAYMENT MODAL */}
+      {/* ═══ PAYMENT MODAL ═══ */}
       <Modal visible={showPayment} transparent animationType="fade">
-        <View style={s.modalOverlay}>
-          <View style={s.paymentModal}>
-            <View style={s.paymentHeader}>
-              <Text style={s.paymentTitle}>Betala med Swish</Text>
-              <View style={s.countdownBox}>
-                <Text style={s.countdownNum}>{countdown}</Text>
-                <Text style={s.countdownLabel}>sek</Text>
+        <View style={ds.modalOverlay}>
+          <View style={[ds.paymentModal, { borderRadius: theme.radius + 12 }]}>
+            <View style={ds.paymentHeader}>
+              <Text style={[ds.paymentTitle, { color: theme.text, fontSize: 24 * theme.fontSize }]}>Betalning</Text>
+              <View style={ds.countdownBox}>
+                <Text style={ds.countdownNum}>{countdown}</Text>
+                <Text style={ds.countdownLabel}>sek</Text>
               </View>
             </View>
 
-            <Text style={s.paymentAmount}>{total} kr</Text>
-            <Text style={s.paymentMessage}>Kvitto: {receiptId}</Text>
-            {settings.swishNumber ? (
-              <Text style={s.paymentSwishNr}>Swish: {settings.swishNumber}</Text>
-            ) : null}
+            {/* Payment method selector */}
+            {payMethods.length > 1 && (
+              <View style={ds.payMethodRow}>
+                {payMethods.map((m) => (
+                  <TouchableOpacity
+                    key={m.key}
+                    style={[ds.payMethodBtn, { borderRadius: theme.radius, backgroundColor: selectedPayMethod === m.key ? theme.primary : "#f5f5f5" }]}
+                    onPress={() => setSelectedPayMethod(m.key)}
+                  >
+                    <Ionicons name={m.icon as any} size={18} color={selectedPayMethod === m.key ? "#fff" : "#6b7c74"} />
+                    <Text style={[ds.payMethodText, { color: selectedPayMethod === m.key ? "#fff" : "#6b7c74" }]}>{m.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
 
-            <TouchableOpacity style={s.receiptBtn} onPress={handleShowReceipt}>
-              <Text style={s.receiptBtnText}>Visa kvitto</Text>
+            <Text style={[ds.paymentAmount, { color: theme.accent }]}>{total} kr</Text>
+            {selectedTip > 0 && <Text style={ds.paymentTipNote}>inkl. {selectedTip} kr dricks</Text>}
+            <Text style={ds.paymentMessage}>Kvitto: {receiptId}</Text>
+
+            {/* QR code for Swish */}
+            {selectedPayMethod === "swish" && settings.swishNumber ? (
+              <View style={ds.qrContainer}>
+                <QRCode value={`C${settings.swishNumber};${total};Kvitto ${receiptId}`} size={160} color={theme.text} backgroundColor="#fff" />
+                <Text style={ds.paymentSwishNr}>Swish: {settings.swishNumber}</Text>
+              </View>
+            ) : selectedPayMethod === "swish" && !settings.swishNumber ? (
+              <Text style={ds.paymentSwishNr}>Ange Swish-nummer i inställningar</Text>
+            ) : selectedPayMethod === "card" ? (
+              <View style={ds.cardPayInfo}>
+                <Ionicons name="card-outline" size={40} color={theme.primary} />
+                <Text style={[ds.cardPayText, { fontSize: 16 * theme.fontSize }]}>Dra kortet i terminalen</Text>
+              </View>
+            ) : (
+              <View style={ds.cardPayInfo}>
+                <Ionicons name="cash-outline" size={40} color={theme.primary} />
+                <Text style={[ds.cardPayText, { fontSize: 16 * theme.fontSize }]}>Betala {total} kr kontant</Text>
+              </View>
+            )}
+
+            {/* Queue number */}
+            {settings.orderQueueEnabled && queueNumber && (
+              <View style={[ds.queueBox, { backgroundColor: theme.primary + "15" }]}>
+                <Text style={[ds.queueLabel, { color: theme.primary }]}>Ditt könummer</Text>
+                <Text style={[ds.queueNum, { color: theme.primary }]}>{queueNumber}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity style={[ds.receiptBtn, { borderRadius: theme.radius + 2 }]} onPress={handleShowReceipt}>
+              <Ionicons name="receipt-outline" size={18} color="#fff" />
+              <Text style={ds.receiptBtnText}>Visa kvitto</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={s.cancelPayBtn} onPress={() => setShowPayment(false)}>
-              <Text style={s.cancelPayText}>Avbryt</Text>
+            <TouchableOpacity style={ds.cancelPayBtn} onPress={() => setShowPayment(false)}>
+              <Text style={ds.cancelPayText}>Avbryt</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* RECEIPT MODAL */}
+      {/* ═══ RECEIPT MODAL ═══ */}
       <Modal visible={showReceipt} transparent animationType="fade">
-        <View style={s.modalOverlay}>
-          <View style={s.receiptModal}>
-            <View style={s.receiptHeader}>
-              <Text style={s.receiptLogo}>{settings.storeName}</Text>
-              <View style={s.countdownBox}>
-                <Text style={s.countdownNum}>{countdown}</Text>
-                <Text style={s.countdownLabel}>sek</Text>
+        <View style={ds.modalOverlay}>
+          <View style={[ds.receiptModal, { borderRadius: theme.radius + 12 }]}>
+            <View style={ds.receiptHeader}>
+              <View>
+                <Text style={[ds.receiptLogo, { color: theme.text }]}>{settings.storeName}</Text>
+                {settings.companyAddress ? <Text style={ds.receiptAddress}>{settings.companyAddress}</Text> : null}
+              </View>
+              <View style={ds.countdownBox}>
+                <Text style={ds.countdownNum}>{countdown}</Text>
+                <Text style={ds.countdownLabel}>sek</Text>
               </View>
             </View>
 
-            <View style={s.receiptIdRow}>
-              <Text style={s.receiptLabel}>KVITTO</Text>
-              <Text style={s.receiptIdText}>#{receiptId}</Text>
+            <View style={ds.receiptIdRow}>
+              <Text style={ds.receiptLabel}>KVITTO</Text>
+              <Text style={[ds.receiptIdText, { color: theme.accent }]}>#{receiptId}</Text>
             </View>
 
-            <Text style={s.receiptTime}>{new Date().toLocaleString("sv-SE")}</Text>
+            {settings.receiptShowDateTime && <Text style={ds.receiptTime}>{new Date().toLocaleString("sv-SE")}</Text>}
 
-            <View style={s.receiptItems}>
+            <View style={ds.receiptItems}>
               {cart.map((item) => (
-                <View key={item.productId} style={s.receiptItemRow}>
-                  <Text style={s.receiptItemName}>{item.qty} x {item.name}</Text>
-                  <Text style={s.receiptItemPrice}>{item.price * item.qty} kr</Text>
+                <View key={item.productId} style={ds.receiptItemRow}>
+                  <Text style={ds.receiptItemName}>{item.qty} × {item.name}</Text>
+                  <Text style={ds.receiptItemPrice}>{item.price * item.qty} kr</Text>
                 </View>
               ))}
             </View>
 
-            <View style={s.receiptDivider} />
+            <View style={ds.receiptDivider} />
 
-            <View style={s.receiptTotalRow}>
-              <Text style={s.receiptTotalLabel}>TOTALT</Text>
-              <Text style={s.receiptTotalValue}>{total} kr</Text>
+            {selectedTip > 0 && (
+              <View style={ds.receiptItemRow}>
+                <Text style={ds.receiptItemName}>Dricks</Text>
+                <Text style={ds.receiptItemPrice}>{selectedTip} kr</Text>
+              </View>
+            )}
+
+            {settings.receiptShowVat && (
+              <View style={ds.receiptItemRow}>
+                <Text style={[ds.receiptItemName, { color: "#8a9b93" }]}>varav moms (25%)</Text>
+                <Text style={[ds.receiptItemPrice, { color: "#8a9b93" }]}>{Math.round(subtotal - subtotal / 1.25)} kr</Text>
+              </View>
+            )}
+
+            <View style={ds.receiptTotalRow}>
+              <Text style={[ds.receiptTotalLabel, { color: theme.text }]}>TOTALT</Text>
+              <Text style={[ds.receiptTotalValue, { color: theme.text }]}>{total} kr</Text>
             </View>
 
-            <Text style={s.receiptThankYou}>{settings.receiptThankYou}</Text>
+            <Text style={ds.receiptPayMethod}>Betalat med: {selectedPayMethod === "swish" ? "Swish" : selectedPayMethod === "card" ? "Kort" : "Kontant"}</Text>
 
-            <TouchableOpacity style={s.receiptCloseBtn} onPress={handleCloseReceipt}>
-              <Text style={s.receiptCloseBtnText}>Stäng & klar</Text>
+            {settings.orderQueueEnabled && queueNumber && (
+              <View style={[ds.queueBox, { backgroundColor: theme.primary + "15", marginVertical: 10 }]}>
+                <Text style={[ds.queueLabel, { color: theme.primary }]}>Ditt könummer</Text>
+                <Text style={[ds.queueNum, { color: theme.primary }]}>{queueNumber}</Text>
+              </View>
+            )}
+
+            <Text style={[ds.receiptThankYou, { color: theme.text + "80" }]}>{settings.receiptThankYou || "Tack för ditt köp!"}</Text>
+            {settings.receiptFooter ? <Text style={ds.receiptFooter}>{settings.receiptFooter}</Text> : null}
+            {settings.orgNumber ? <Text style={ds.receiptOrg}>Org.nr: {settings.orgNumber}</Text> : null}
+
+            <TouchableOpacity style={[ds.receiptCloseBtn, { borderRadius: theme.radius + 2, backgroundColor: theme.primary }]} onPress={handleCloseReceipt}>
+              <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
+              <Text style={ds.receiptCloseBtnText}>Klar</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* SCREENSAVER */}
-      {showScreensaver && (
-        <TouchableOpacity
-          style={s.screensaver}
-          activeOpacity={1}
-          onPress={() => { setShowScreensaver(false); resetScreensaverTimer(); }}
-        >
-          <View style={s.ssLogoWrapper}>
-            <View style={s.ssRing} />
-            <Text style={s.ssLogo}>EK</Text>
+      {/* ═══ ADMIN AUTH MODAL ═══ */}
+      <Modal visible={showAdminAuth} transparent animationType="fade">
+        <View style={ds.modalOverlay}>
+          <View style={[ds.adminAuthModal, { borderRadius: theme.radius + 12 }]}>
+            <Ionicons name="lock-closed-outline" size={32} color={theme.primary} />
+            <Text style={[ds.adminAuthTitle, { color: theme.text }]}>Admin-åtkomst</Text>
+            <Text style={ds.adminAuthDesc}>Ange lösenord för att lämna kiosk-läget</Text>
+            <TextInput
+              style={[ds.adminAuthInput, { borderRadius: theme.radius }]}
+              value={adminPassword}
+              onChangeText={setAdminPassword}
+              placeholder="Lösenord"
+              placeholderTextColor="#a0a0a0"
+              secureTextEntry
+              autoFocus
+            />
+            <TouchableOpacity style={[ds.adminAuthSubmit, { borderRadius: theme.radius, backgroundColor: theme.primary }]} onPress={() => {
+              if (adminPassword === settings.kioskPassword) { setShowAdminAuth(false); router.replace("/mode-select"); }
+              else { Alert.alert("Fel lösenord", "Försök igen."); setAdminPassword(""); }
+            }}>
+              <Text style={ds.adminAuthSubmitText}>Lås upp</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={ds.adminAuthCancel} onPress={() => setShowAdminAuth(false)}>
+              <Text style={ds.adminAuthCancelText}>Avbryt</Text>
+            </TouchableOpacity>
           </View>
-          <Text style={s.ssTitle}>{settings.screensaverText || "Välkommen!"}</Text>
-          <Text style={s.ssHint}>TRYCK VAR SOM HELST FÖR ATT BÖRJA</Text>
+        </View>
+      </Modal>
+
+      {/* ═══ SCREENSAVER ═══ */}
+      {showScreensaver && (
+        <TouchableOpacity style={ds.screensaver} activeOpacity={1} onPress={() => { setShowScreensaver(false); resetScreensaverTimer(); }}>
+          <View style={ds.ssLogoWrapper}>
+            <View style={[ds.ssRing, { borderColor: theme.accent }]} />
+            <Text style={[ds.ssLogo, { color: theme.secondary }]}>EK</Text>
+          </View>
+          <Text style={ds.ssTitle}>{settings.screensaverText || "Välkommen!"}</Text>
+          <Text style={ds.ssHint}>TRYCK VAR SOM HELST FÖR ATT BÖRJA</Text>
         </TouchableOpacity>
       )}
     </View>
   );
 }
 
-const s = StyleSheet.create({
-  stage: { flex: 1, backgroundColor: "#e8f0ec" },
-  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#f0f7f4" },
-  loadingText: { marginTop: 12, color: "#6b7c74", fontSize: 18 },
+// ═══ STYLES ═══
+const ds = StyleSheet.create({
+  stage: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { marginTop: 12 },
+
+  // Emergency
+  emergencyBar: { backgroundColor: "#dc2626", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 8, paddingHorizontal: 16 },
+  emergencyText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+
+  // Pause overlay
+  pauseOverlay: { flex: 1, justifyContent: "center", alignItems: "center" },
+  pauseCard: { alignItems: "center", padding: 40, gap: 16 },
+  pauseTitle: { fontSize: 32, fontWeight: "700" },
+  pauseMsg: { fontSize: 18, textAlign: "center", maxWidth: 400, lineHeight: 26 },
 
   // Top Bar
-  topBar: { height: 52, backgroundColor: "rgba(255,255,255,0.7)", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 28 },
-  topBarTitle: { fontSize: 32, fontStyle: "italic", color: "#2c3e35" },
+  topBar: { height: 52, backgroundColor: "rgba(255,255,255,0.85)", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24 },
+  topBarTitle: { fontWeight: "700", fontStyle: "italic" },
   topBarRight: { flexDirection: "row", alignItems: "center", gap: 16 },
-  topBarHint: { fontSize: 13, color: "#6b7c74", letterSpacing: 2, textTransform: "uppercase" },
-  exitBtn: { padding: 8 },
+  topBarHint: { color: "#6b7c74", letterSpacing: 2, textTransform: "uppercase" },
+  exitBtnSmall: { padding: 8 },
+  exitBtn: { position: "absolute", top: 16, right: 16, padding: 8 },
 
   // Body
   body: { flex: 1, flexDirection: "row" },
   mainContent: { flex: 1 },
 
+  // Welcome
+  welcomeText: { fontStyle: "italic", marginBottom: 4 },
+
+  // Bubble
+  bubble: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 8 },
+  bubbleText: { fontWeight: "600" },
+  bubbleSubtext: {},
+
   // Overview
   overviewScroll: { flex: 1 },
-  overviewContent: { padding: 28, paddingBottom: 60, gap: 20 },
-  sectionLabel: { fontSize: 13, letterSpacing: 2, color: "#6b7c74", textTransform: "uppercase" },
-  sectionTitle: { fontSize: 42, fontStyle: "italic", color: "#2c3e35", marginBottom: 8 },
-  catGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  catCard: { width: "23%", minHeight: 160, borderRadius: 18, padding: 18, justifyContent: "flex-end", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", elevation: 3 },
-  catEmoji: { position: "absolute", top: 12, right: 14, fontSize: 44, opacity: 0.6 },
-  catName: { fontSize: 28, fontStyle: "italic", color: "#2c3e35" },
-  catSub: { fontSize: 15, color: "#6b7c74", marginTop: 2 },
+  overviewContent: { padding: 24, paddingBottom: 60, gap: 16 },
+  sectionLabel: { letterSpacing: 2, color: "#6b7c74", textTransform: "uppercase" },
+  sectionTitle: { fontWeight: "700", fontStyle: "italic", marginBottom: 8 },
+  catGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  catCard: { width: "23%", minHeight: 140, padding: 16, justifyContent: "flex-end", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", elevation: 4 },
+  catEmoji: { position: "absolute", top: 10, right: 12, fontSize: 40, opacity: 0.6 },
+  catName: { fontWeight: "700", fontStyle: "italic", color: "#2c3e35" },
+  catSub: { color: "#6b7c74", marginTop: 2 },
 
   // Offers
-  offersTitle: { fontSize: 32, fontStyle: "italic", color: "#2c3e35", marginTop: 8 },
-  offersGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  offerCard: { width: "48%", backgroundColor: "#fdf8f0", borderWidth: 1, borderColor: "#e8c87a", borderRadius: 14, padding: 16 },
-  offerInfo: { flex: 1 },
-  offerLabel: { fontSize: 11, letterSpacing: 1.5, color: "#c47a3a", textTransform: "uppercase", marginBottom: 4 },
-  offerTitle2: { fontSize: 22, fontStyle: "italic", color: "#2c3e35", marginBottom: 4 },
-  offerDesc: { fontSize: 14, color: "#6b7c74" },
+  offersTitle: { fontWeight: "700", fontStyle: "italic", marginTop: 8 },
+  offersGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  offerCard: { width: "48%", backgroundColor: "#fdf8f0", borderWidth: 1, borderColor: "#e8c87a", padding: 16 },
+  offerBadge: { backgroundColor: "rgba(196,122,58,0.15)", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginBottom: 8 },
+  offerBadgeText: { fontSize: 10, fontWeight: "700", color: "#c47a3a", letterSpacing: 1.5, textTransform: "uppercase" },
+  offerTitle2: { fontWeight: "700", fontStyle: "italic", color: "#2c3e35", marginBottom: 4 },
+  offerDesc: { color: "#6b7c74" },
   offerPrice: { fontSize: 18, fontWeight: "700", color: "#c47a3a", marginTop: 6 },
 
   // Category
   categoryPage: { flex: 1 },
-  categoryTop: { flexDirection: "row", alignItems: "center", gap: 16, padding: 18, paddingHorizontal: 28 },
-  backBtn: { backgroundColor: "#ffffff", borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", borderRadius: 12, height: 56, width: 160, justifyContent: "center", alignItems: "center", elevation: 2 },
-  backBtnText: { fontSize: 20, color: "#2c3e35" },
-  categoryHeading: { fontSize: 36, fontStyle: "italic", color: "#2c3e35" },
+  categoryTop: { flexDirection: "row", alignItems: "center", gap: 14, padding: 16, paddingHorizontal: 24 },
+  backBtn: { backgroundColor: "#ffffff", borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", height: 48, paddingHorizontal: 20, flexDirection: "row", alignItems: "center", gap: 8, elevation: 2 },
+  backBtnText: { color: "#2c3e35" },
+  categoryHeading: { fontWeight: "700", fontStyle: "italic" },
 
   // Products
   productScrollView: { flex: 1 },
-  productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 28, paddingBottom: 24 },
-  productCard: { width: "19%", backgroundColor: "#ffffff", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", borderRadius: 14, overflow: "hidden", elevation: 3 },
-  productImgBox: { height: 90, justifyContent: "center", alignItems: "center", backgroundColor: "#f8faf9" },
-  productEmoji: { fontSize: 40 },
-  badge: { position: "absolute", top: 6, left: 6, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  badgeText: { fontSize: 11, fontWeight: "700", color: "#fff" },
+  productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 24, paddingBottom: 24 },
+  productCard: { backgroundColor: "#ffffff", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", overflow: "hidden", elevation: 3 },
+  productImgBox: { height: 80, justifyContent: "center", alignItems: "center" },
+  productEmoji: { fontSize: 36 },
+  badge: { position: "absolute", top: 6, left: 6, paddingHorizontal: 8, paddingVertical: 2 },
+  badgeText: { fontSize: 10, fontWeight: "700", color: "#fff" },
+  outOfStockBadge: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
+  outOfStockText: { color: "#fff", fontWeight: "700", fontSize: 14, letterSpacing: 2 },
   productInfoBox: { padding: 10, flex: 1 },
-  productName: { fontSize: 17, fontWeight: "700", color: "#2c3e35" },
+  productName: { fontWeight: "700" },
   priceRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 },
-  productPrice: { fontSize: 16, fontStyle: "italic", color: "#c47a3a" },
-  originalPrice: { fontSize: 13, color: "#aaa", textDecorationLine: "line-through" },
+  productPrice: { fontWeight: "600", fontStyle: "italic" },
+  originalPrice: { color: "#aaa", textDecorationLine: "line-through" },
   qtyRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
-  qtyBtn: { width: 38, height: 38, backgroundColor: "rgba(91,143,168,0.12)", borderWidth: 2, borderColor: "rgba(91,143,168,0.3)", borderRadius: 8, justifyContent: "center", alignItems: "center" },
+  qtyBtn: { width: 36, height: 36, backgroundColor: "rgba(91,143,168,0.12)", borderWidth: 2, borderColor: "rgba(91,143,168,0.2)", justifyContent: "center", alignItems: "center" },
   qtyBtnDim: { opacity: 0.35 },
-  qtyBtnText: { fontSize: 22, color: "#5b8fa8", fontWeight: "700" },
-  qtyVal: { fontSize: 20, fontWeight: "700", color: "#2c3e35", minWidth: 28, textAlign: "center" },
+  qtyVal: { fontWeight: "700", minWidth: 24, textAlign: "center" },
 
   // Cart
-  cartPanel: { width: 340, backgroundColor: "rgba(255,255,255,0.75)", borderLeftWidth: 1, borderLeftColor: "rgba(0,0,0,0.06)" },
+  cartPanel: { width: 320, backgroundColor: "rgba(255,255,255,0.9)", borderLeftWidth: 1, borderLeftColor: "rgba(0,0,0,0.06)" },
   cartTop: { flex: 1 },
   cartTopContent: { padding: 16 },
-  cartTitle: { fontSize: 24, fontStyle: "italic", color: "#2c3e35", marginBottom: 14 },
-  cartEmpty: { fontSize: 16, color: "#8a9b93", lineHeight: 24 },
-  cartItemRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.08)", borderStyle: "dashed" },
-  cartItemName: { fontSize: 17, color: "#2c3e35", flex: 1 },
-  cartItemPrice: { fontSize: 17, color: "#6b7c74" },
-  cartBottom: { borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.06)", padding: 14, gap: 10 },
+  cartTitle: { fontWeight: "700", marginBottom: 12 },
+  cartEmptyState: { alignItems: "center", paddingVertical: 30, gap: 10 },
+  cartEmpty: { color: "#8a9b93", lineHeight: 22 },
+  cartItemRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)" },
+  cartItemName: { color: "#2c3e35", fontWeight: "600" },
+  cartItemQty: { fontSize: 12, color: "#8a9b93", marginTop: 1 },
+  cartItemPrice: { fontWeight: "700", color: "#2c3e35" },
+  cartItemRemove: { padding: 4 },
+  cartBottom: { borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.06)", padding: 14, gap: 8 },
+
+  // Tipping
+  tipSection: { marginBottom: 8 },
+  tipLabel: { fontWeight: "600", color: "#6b7c74", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 },
+  tipRow: { flexDirection: "row", gap: 6 },
+  tipBtn: { flex: 1, height: 38, justifyContent: "center", alignItems: "center" },
+  tipBtnText: { fontWeight: "600", fontSize: 13 },
+
   cartCountRow: { flexDirection: "row", justifyContent: "space-between" },
-  cartCountLabel: { fontSize: 16, color: "#6b7c74" },
-  cartCountVal: { fontSize: 16, fontWeight: "700", color: "#2c3e35" },
-  cartTotalRow: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.08)", paddingTop: 10 },
-  cartTotalLabel: { fontSize: 26, fontStyle: "italic", fontWeight: "700", color: "#2c3e35" },
-  cartTotalVal: { fontSize: 26, fontStyle: "italic", fontWeight: "700", color: "#2c3e35" },
-  payBtn: { backgroundColor: "#72383D", borderRadius: 12, paddingVertical: 14, alignItems: "center", elevation: 4 },
-  payBtnDisabled: { opacity: 0.35 },
-  payBtnText: { color: "#EFE9E1", fontSize: 22, fontWeight: "700" },
-  clearBtn: { borderWidth: 1, borderColor: "#D1C7BD", borderRadius: 12, paddingVertical: 10, alignItems: "center" },
-  clearBtnText: { color: "#AC9C8D", fontSize: 16 },
+  cartCountLabel: { color: "#6b7c74" },
+  cartCountVal: { fontWeight: "700", color: "#2c3e35" },
+  cartTotalRow: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.08)", paddingTop: 8 },
+  cartTotalLabel: { fontWeight: "700", fontStyle: "italic" },
+  cartTotalVal: { fontWeight: "700", fontStyle: "italic" },
+  payBtn: { flexDirection: "row", gap: 8, paddingVertical: 14, alignItems: "center", justifyContent: "center", elevation: 4 },
+  payBtnText: { color: "#fff", fontWeight: "700" },
+  clearBtn: { borderWidth: 1, borderColor: "#D1C7BD", paddingVertical: 10, alignItems: "center" },
+  clearBtnText: { color: "#AC9C8D" },
 
   // Payment Modal
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", alignItems: "center" },
-  paymentModal: { backgroundColor: "#fff", borderRadius: 22, width: 500, padding: 28, elevation: 10, alignItems: "center" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", alignItems: "center" },
+  paymentModal: { backgroundColor: "#fff", width: 480, padding: 28, elevation: 10, alignItems: "center" },
   paymentHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%", marginBottom: 16 },
-  paymentTitle: { fontSize: 26, fontStyle: "italic", color: "#2c3e35" },
-  countdownBox: { flexDirection: "row", alignItems: "baseline", gap: 4, backgroundColor: "rgba(0,0,0,0.04)", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
-  countdownNum: { fontSize: 24, fontWeight: "700", color: "#c47a3a" },
-  countdownLabel: { fontSize: 14, color: "#6b7c74" },
-  paymentAmount: { fontSize: 44, fontWeight: "700", color: "#c47a3a", marginVertical: 12 },
-  paymentMessage: { fontSize: 18, color: "#6b7c74", marginBottom: 4 },
-  paymentSwishNr: { fontSize: 16, color: "#6b7c74", marginBottom: 20 },
-  receiptBtn: { height: 56, width: "100%", backgroundColor: "#5b8fa8", borderRadius: 12, justifyContent: "center", alignItems: "center", elevation: 4, marginBottom: 10 },
-  receiptBtnText: { fontSize: 22, fontWeight: "700", color: "#fff" },
+  paymentTitle: { fontWeight: "700" },
+  countdownBox: { flexDirection: "row", alignItems: "baseline", gap: 4, backgroundColor: "rgba(0,0,0,0.04)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  countdownNum: { fontSize: 22, fontWeight: "700", color: "#c47a3a" },
+  countdownLabel: { fontSize: 13, color: "#6b7c74" },
+  payMethodRow: { flexDirection: "row", gap: 8, width: "100%", marginBottom: 16 },
+  payMethodBtn: { flex: 1, flexDirection: "row", gap: 6, height: 44, justifyContent: "center", alignItems: "center" },
+  payMethodText: { fontWeight: "600", fontSize: 14 },
+  paymentAmount: { fontSize: 42, fontWeight: "700", marginVertical: 8 },
+  paymentTipNote: { fontSize: 13, color: "#8a9b93", marginBottom: 4 },
+  paymentMessage: { fontSize: 16, color: "#6b7c74", marginBottom: 4 },
+  qrContainer: { alignItems: "center", marginVertical: 12, gap: 10 },
+  paymentSwishNr: { fontSize: 14, color: "#6b7c74", marginBottom: 16 },
+  cardPayInfo: { alignItems: "center", gap: 10, marginVertical: 16, padding: 20, backgroundColor: "#f9fafb", borderRadius: 12, width: "100%" },
+  cardPayText: { fontWeight: "600", color: "#2c3e35" },
+  queueBox: { padding: 14, borderRadius: 10, alignItems: "center", width: "100%", marginBottom: 8 },
+  queueLabel: { fontSize: 12, fontWeight: "600", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 },
+  queueNum: { fontSize: 32, fontWeight: "700" },
+  receiptBtn: { height: 52, width: "100%", backgroundColor: "#5b8fa8", flexDirection: "row", gap: 8, justifyContent: "center", alignItems: "center", elevation: 4, marginBottom: 8 },
+  receiptBtnText: { fontSize: 20, fontWeight: "700", color: "#fff" },
   cancelPayBtn: { padding: 10 },
-  cancelPayText: { fontSize: 16, color: "#8a9b93" },
+  cancelPayText: { fontSize: 15, color: "#8a9b93" },
 
   // Receipt Modal
-  receiptModal: { backgroundColor: "#fff", borderRadius: 22, width: 480, padding: 28, elevation: 10 },
-  receiptHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
-  receiptLogo: { fontSize: 24, fontStyle: "italic", color: "#2c3e35" },
-  receiptIdRow: { flexDirection: "row", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.08)", paddingBottom: 10, marginBottom: 8 },
-  receiptLabel: { fontSize: 14, letterSpacing: 2, color: "#6b7c74" },
-  receiptIdText: { fontSize: 26, fontWeight: "700", color: "#c47a3a" },
-  receiptTime: { fontSize: 14, color: "#6b7c74", marginBottom: 12 },
+  receiptModal: { backgroundColor: "#fff", width: 440, padding: 24, elevation: 10 },
+  receiptHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 },
+  receiptLogo: { fontSize: 22, fontWeight: "700", fontStyle: "italic" },
+  receiptAddress: { fontSize: 11, color: "#8a9b93", marginTop: 2 },
+  receiptIdRow: { flexDirection: "row", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.08)", paddingBottom: 8, marginBottom: 6 },
+  receiptLabel: { fontSize: 12, letterSpacing: 2, color: "#6b7c74" },
+  receiptIdText: { fontSize: 22, fontWeight: "700" },
+  receiptTime: { fontSize: 12, color: "#8a9b93", marginBottom: 10 },
   receiptItems: { gap: 4 },
-  receiptItemRow: { flexDirection: "row", justifyContent: "space-between" },
-  receiptItemName: { fontSize: 18, color: "#2c3e35" },
-  receiptItemPrice: { fontSize: 18, color: "#2c3e35" },
-  receiptDivider: { borderTopWidth: 1, borderStyle: "dashed", borderTopColor: "rgba(0,0,0,0.1)", marginVertical: 12 },
-  receiptTotalRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 8 },
-  receiptTotalLabel: { fontSize: 24, fontWeight: "700", color: "#2c3e35" },
-  receiptTotalValue: { fontSize: 24, fontWeight: "700", color: "#2c3e35" },
-  receiptThankYou: { fontSize: 16, fontStyle: "italic", color: "#6b7c74", textAlign: "center", marginVertical: 12 },
-  receiptCloseBtn: { height: 52, backgroundColor: "#5b8fa8", borderRadius: 12, justifyContent: "center", alignItems: "center" },
-  receiptCloseBtnText: { fontSize: 20, fontWeight: "700", color: "#fff" },
+  receiptItemRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 2 },
+  receiptItemName: { fontSize: 15, color: "#2c3e35" },
+  receiptItemPrice: { fontSize: 15, color: "#2c3e35" },
+  receiptDivider: { borderTopWidth: 1, borderStyle: "dashed", borderTopColor: "rgba(0,0,0,0.1)", marginVertical: 8 },
+  receiptTotalRow: { flexDirection: "row", justifyContent: "space-between", marginVertical: 6 },
+  receiptTotalLabel: { fontSize: 22, fontWeight: "700" },
+  receiptTotalValue: { fontSize: 22, fontWeight: "700" },
+  receiptPayMethod: { fontSize: 12, color: "#8a9b93", textAlign: "center", marginTop: 4 },
+  receiptThankYou: { fontSize: 15, fontStyle: "italic", textAlign: "center", marginVertical: 8 },
+  receiptFooter: { fontSize: 11, color: "#b0b8b3", textAlign: "center" },
+  receiptOrg: { fontSize: 10, color: "#b0b8b3", textAlign: "center", marginTop: 4 },
+  receiptCloseBtn: { height: 48, flexDirection: "row", gap: 8, justifyContent: "center", alignItems: "center", marginTop: 8 },
+  receiptCloseBtnText: { fontSize: 18, fontWeight: "700", color: "#fff" },
+
+  // Admin Auth
+  adminAuthModal: { backgroundColor: "#fff", width: 380, padding: 28, elevation: 10, alignItems: "center" },
+  adminAuthTitle: { fontSize: 22, fontWeight: "700", marginTop: 12, marginBottom: 4 },
+  adminAuthDesc: { fontSize: 14, color: "#6b7c74", textAlign: "center", marginBottom: 20 },
+  adminAuthInput: { width: "100%", height: 48, borderWidth: 1, borderColor: "#d1d5db", paddingHorizontal: 16, fontSize: 18, color: "#2c3e35", textAlign: "center", marginBottom: 14 },
+  adminAuthSubmit: { width: "100%", height: 48, justifyContent: "center", alignItems: "center", marginBottom: 8 },
+  adminAuthSubmitText: { fontSize: 17, fontWeight: "700", color: "#fff" },
+  adminAuthCancel: { padding: 10 },
+  adminAuthCancelText: { fontSize: 15, color: "#8a9b93" },
 
   // Screensaver
   screensaver: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#322D29", justifyContent: "center", alignItems: "center", gap: 48, zIndex: 100 },
   ssLogoWrapper: { width: 160, height: 160, justifyContent: "center", alignItems: "center" },
-  ssRing: { position: "absolute", width: 160, height: 160, borderRadius: 80, borderWidth: 3, borderColor: "#C9A84C" },
-  ssLogo: { fontSize: 60, fontWeight: "700", color: "#ac9c8d" },
+  ssRing: { position: "absolute", width: 160, height: 160, borderRadius: 80, borderWidth: 3 },
+  ssLogo: { fontSize: 60, fontWeight: "700" },
   ssTitle: { fontSize: 40, fontWeight: "700", color: "#EFE9E1", letterSpacing: 2 },
-  ssHint: { fontSize: 20, color: "rgba(239,233,225,0.5)", letterSpacing: 4, textTransform: "uppercase" },
+  ssHint: { fontSize: 18, color: "rgba(239,233,225,0.5)", letterSpacing: 4, textTransform: "uppercase" },
 });

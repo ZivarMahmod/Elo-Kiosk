@@ -2,7 +2,7 @@
  * Mode select screen — choose Kiosk or Admin mode
  */
 
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/hooks/useAuth";
 import { Ionicons } from "@expo/vector-icons";
@@ -10,6 +10,8 @@ import { Ionicons } from "@expo/vector-icons";
 export default function ModeSelectScreen() {
   const router = useRouter();
   const { email, kioskId, logout } = useAuth();
+  const { width } = useWindowDimensions();
+  const isMobile = width < 600;
 
   const handleLogout = async () => {
     await logout();
@@ -35,10 +37,16 @@ export default function ModeSelectScreen() {
         Hur vill du använda denna enhet?
       </Text>
 
-      <View style={styles.cardRow}>
+      {isMobile && (
+        <View style={styles.autoHint}>
+          <Ionicons name="phone-portrait-outline" size={16} color="#5b8fa8" />
+          <Text style={styles.autoHintText}>Liten skärm upptäckt — rekommenderar Admin-läge</Text>
+        </View>
+      )}
+      <View style={[styles.cardRow, isMobile && styles.cardCol]}>
         {/* Kiosk Mode */}
         <TouchableOpacity
-          style={[styles.modeCard, styles.kioskCard]}
+          style={[styles.modeCard, styles.kioskCard, isMobile && styles.modeCardMobile]}
           onPress={() => router.push("/(kiosk)")}
           activeOpacity={0.8}
         >
@@ -59,7 +67,7 @@ export default function ModeSelectScreen() {
 
         {/* Admin Mode */}
         <TouchableOpacity
-          style={[styles.modeCard, styles.adminCard]}
+          style={[styles.modeCard, styles.adminCard, isMobile && styles.modeCardMobile]}
           onPress={() => router.push("/(admin)")}
           activeOpacity={0.8}
         >
@@ -143,6 +151,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 24,
   },
+  cardCol: {
+    flexDirection: "column",
+    gap: 16,
+    width: "100%",
+    maxWidth: 400,
+  },
+  autoHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#e8f0fa",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  autoHintText: {
+    fontSize: 13,
+    color: "#5b8fa8",
+  },
   modeCard: {
     width: 340,
     backgroundColor: "#ffffff",
@@ -193,6 +221,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 8,
+  },
+  modeCardMobile: {
+    width: "100%",
+    padding: 24,
   },
   adminTag: {
     backgroundColor: "#f5ede4",

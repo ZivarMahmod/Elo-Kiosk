@@ -4,7 +4,7 @@
  * Drift, Ljud & Tillganglighet, Funktioner, Kvittodesign, Sakerhet
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Switch, Alert,
@@ -20,15 +20,26 @@ const DAY_LABELS: Record<string, string> = {
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const FONTS = ["Inter", "Roboto", "Open Sans", "Lato", "Montserrat", "Poppins"];
 
+type SettingsTab = "store" | "payment" | "theme" | "kiosk" | "hours" | "advanced";
+const TABS: { key: SettingsTab; label: string; icon: string }[] = [
+  { key: "store", label: "Butik", icon: "storefront-outline" },
+  { key: "payment", label: "Betalning", icon: "card-outline" },
+  { key: "theme", label: "Utseende", icon: "color-palette-outline" },
+  { key: "kiosk", label: "Kiosk", icon: "tv-outline" },
+  { key: "hours", label: "Drift", icon: "time-outline" },
+  { key: "advanced", label: "Avancerat", icon: "settings-outline" },
+];
+
 export default function SettingsPage() {
-  const { settings, loading, save } = useSettings();
+  const { settings, loading, save, refresh } = useSettings();
   const [form, setForm] = useState<KioskSettings>(settings);
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("store");
 
-  // Sync form when settings load
-  useState(() => {
-    setForm(settings);
-  });
+  // Sync form when settings finish loading
+  useEffect(() => {
+    if (!loading) setForm(settings);
+  }, [loading]);
 
   const update = useCallback((key: keyof KioskSettings, value: any) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -66,7 +77,23 @@ export default function SettingsPage() {
         </View>
       </View>
 
+      {/* Tab navigation */}
+      <View style={styles.tabRow}>
+        {TABS.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+            onPress={() => setActiveTab(tab.key)}
+          >
+            <Ionicons name={tab.icon as any} size={16} color={activeTab === tab.key ? "#2d6b5a" : "#8a9b93"} />
+            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* ═══ 1. BUTIKSINFORMATION ═══ */}
+      {activeTab === "store" && (
+      <>
       <Section icon="storefront-outline" title="Butiksinformation">
         <Row label="Butiksnamn">
           <Input value={form.storeName} onChange={(v) => update("storeName", v)} placeholder="Elo Kiosk" />
@@ -88,7 +115,12 @@ export default function SettingsPage() {
         </Row>
       </Section>
 
+      </>
+      )}
+
       {/* ═══ 2. BETALNING ═══ */}
+      {activeTab === "payment" && (
+      <>
       <Section icon="card-outline" title="Betalning">
         <Row label="Swish-nummer">
           <Input value={form.swishNumber} onChange={(v) => update("swishNumber", v)} placeholder="07XXXXXXXX" />
@@ -104,7 +136,12 @@ export default function SettingsPage() {
         <SwitchRow label="QR" value={form.paymentQR} onChange={(v) => update("paymentQR", v)} />
       </Section>
 
+      </>
+      )}
+
       {/* ═══ 3. UTSEENDE / TEMA ═══ */}
+      {activeTab === "theme" && (
+      <>
       <Section icon="color-palette-outline" title="Utseende / Tema">
         <ColorRow label="Primärfärg" value={form.primaryColor} onChange={(v) => update("primaryColor", v)} />
         <ColorRow label="Sekundärfärg" value={form.secondaryColor} onChange={(v) => update("secondaryColor", v)} />
@@ -147,7 +184,12 @@ export default function SettingsPage() {
         <SwitchRow label="Animationer" hint="Aktivera/avaktivera UI-animationer" value={form.animationsEnabled} onChange={(v) => update("animationsEnabled", v)} />
       </Section>
 
+      </>
+      )}
+
       {/* ═══ 4. KIOSK-DISPLAY ═══ */}
+      {activeTab === "kiosk" && (
+      <>
       <Section icon="tv-outline" title="Kiosk-display">
         <Row label="Välkomsttext">
           <Input value={form.welcomeText} onChange={(v) => update("welcomeText", v)} placeholder="Välkommen till vår kiosk!" multiline />
@@ -175,7 +217,12 @@ export default function SettingsPage() {
         )}
       </Section>
 
+      </>
+      )}
+
       {/* ═══ 5. DRIFT ═══ */}
+      {activeTab === "hours" && (
+      <>
       <Section icon="time-outline" title="Drift">
         <Text style={styles.subLabel}>Öppettider</Text>
         {DAY_KEYS.map((day) => {
@@ -217,6 +264,12 @@ export default function SettingsPage() {
         </Row>
       </Section>
 
+      </>
+      )}
+
+      {/* ═══ 6-9: ADVANCED TAB ═══ */}
+      {activeTab === "advanced" && (
+      <>
       {/* ═══ 6. LJUD & TILLGÄNGLIGHET ═══ */}
       <Section icon="volume-high-outline" title="Ljud & Tillgänglighet">
         <SwitchRow label="Ljudeffekter" hint="Spela ljud vid interaktioner" value={form.soundEffects} onChange={(v) => update("soundEffects", v)} />
@@ -302,6 +355,9 @@ export default function SettingsPage() {
         </Row>
         <Hint text="Återställ kiosken efter inaktivitet" />
       </Section>
+
+      </>
+      )}
 
       {/* ═══ SAVE BUTTON ═══ */}
       <TouchableOpacity
@@ -422,6 +478,12 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 8 },
   title: { fontSize: 28, fontWeight: "700", color: "#2c3e35" },
   subtitle: { fontSize: 14, color: "#6b7c74" },
+
+  tabRow: { flexDirection: "row", gap: 6, marginBottom: 16, flexWrap: "wrap" },
+  tab: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8, backgroundColor: "#f0f0f0" },
+  tabActive: { backgroundColor: "#e8f5ee" },
+  tabText: { fontSize: 13, fontWeight: "600", color: "#8a9b93" },
+  tabTextActive: { color: "#2d6b5a" },
 
   section: { backgroundColor: "#fff", borderRadius: 14, padding: 18, borderWidth: 1, borderColor: "#f0f0f0" },
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 14 },
