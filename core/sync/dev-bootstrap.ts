@@ -16,7 +16,7 @@ import pb, {
 // Fallbacks are ONLY used in __DEV__ — the whole file is guarded by __DEV__ check.
 // In production builds, tree-shaking removes this file entirely since devBootstrap() returns false immediately.
 const DEV_LICENSE_KEY =
-  (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_DEV_LICENSE_KEY) || "FHXG-BJDA-CYPJ-YH6V";
+  (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_DEV_LICENSE_KEY) || "FHXGBJDA";
 const DEV_EMAIL =
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_DEV_EMAIL) || "zivar68@gmail.com";
 const DEV_PASSWORD =
