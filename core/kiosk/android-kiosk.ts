@@ -2,7 +2,7 @@
  * Android Kiosk Mode helpers
  *
  * For full lock task mode, the app needs to be set as Device Owner:
- *   adb shell dpm set-device-owner com.elokiosk.app/.DeviceAdminReceiver
+ *   adb shell dpm set-device-owner com.corevo.kiosk/.DeviceAdminReceiver
  *
  * Without device owner, we use these soft-lock strategies:
  * 1. Hide status bar (immersive mode) via StatusBar API
@@ -57,9 +57,9 @@ export function isAndroid() {
  * Instructions for setting up full Android lock task mode:
  *
  * 1. Build APK: npx eas build -p android --profile preview
- * 2. Install on device: adb install elo-kiosk.apk
+ * 2. Install on device: adb install corevo-kiosk.apk
  * 3. Set as device owner (requires factory reset first):
- *    adb shell dpm set-device-owner com.elokiosk.app/.DeviceAdminReceiver
+ *    adb shell dpm set-device-owner com.corevo.kiosk/.DeviceAdminReceiver
  * 4. The app will now have full lock task capabilities
  *
  * For managed devices (MDM):

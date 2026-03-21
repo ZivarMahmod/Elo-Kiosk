@@ -36,6 +36,13 @@ export function useCategories(kioskOnly: boolean = false) {
     refresh();
   }, [refresh]);
 
+  // Auto-refresh for kiosk mode — poll every 30 seconds
+  useEffect(() => {
+    if (!kioskOnly) return;
+    const interval = setInterval(refresh, 30000);
+    return () => clearInterval(interval);
+  }, [kioskOnly, refresh]);
+
   const add = useCallback(async (input: CreateCategoryInput) => {
     const result = await createCategory(input);
     await refresh();

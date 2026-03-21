@@ -1,5 +1,5 @@
 /**
- * SQLite table definitions for Elo Kiosk
+ * SQLite table definitions for Corevo Kiosk
  * All tables matching admin portal data model
  * kioskId column enables per-kiosk data isolation
  */

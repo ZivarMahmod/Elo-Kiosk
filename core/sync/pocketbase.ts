@@ -1,6 +1,6 @@
 /**
  * PocketBase client — single instance for the whole app
- * Connects to the Elo-Kiosk cloud backend on Fly.io
+ * Connects to the Corevo Kiosk cloud backend on Fly.io
  */
 
 import PocketBase from "pocketbase";
@@ -56,9 +56,9 @@ export async function clearAuthStore(): Promise<void> {
 }
 
 // License/activation storage
-const LICENSE_KEY = "elo_license_key";
-const TENANT_KEY = "elo_tenant_id";
-const KIOSK_KEY = "elo_kiosk_id";
+const LICENSE_KEY = "corevo_license_key";
+const TENANT_KEY = "corevo_tenant_id";
+const KIOSK_KEY = "corevo_kiosk_id";
 
 // Cached kiosk ID — cleared on logout/license change
 let _cachedKioskId: string | null = null;

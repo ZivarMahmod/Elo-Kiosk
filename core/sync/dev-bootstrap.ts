@@ -54,28 +54,57 @@ export async function devBootstrap(): Promise<boolean> {
         return false;
       }
 
-      // Find or create kiosk
-      let kiosk;
+      // Find existing kiosk — check kiosks collection first, then look at products
+      let kioskId: string | null = null;
+
+      // 1. Try kiosks collection
       try {
-        kiosk = await pb.collection("kiosks").getFirstListItem(
+        const kiosk = await pb.collection("kiosks").getFirstListItem(
           `tenantId = "${license.tenantId}"`
         );
+        kioskId = kiosk.id;
         await pb.collection("kiosks").update(kiosk.id, {
           status: "active",
           lastSeen: new Date().toISOString(),
         });
       } catch {
-        kiosk = await pb.collection("kiosks").create({
-          tenantId: license.tenantId,
-          name: `Dev Kiosk`,
-          licenseKey: DEV_LICENSE_KEY,
-          status: "active",
-          lastSeen: new Date().toISOString(),
-        });
+        // No kiosk in kiosks collection
       }
 
-      await saveLicenseData(DEV_LICENSE_KEY, license.tenantId, kiosk.id);
-      console.log("[DEV] License activated, kioskId:", kiosk.id);
+      // 2. If no kiosk found, check if products/categories already exist with a kioskId
+      if (!kioskId) {
+        try {
+          const existingProduct = await pb.collection("pb_products").getFirstListItem(
+            `tenantId = "${license.tenantId}"`
+          );
+          if (existingProduct?.kioskId) {
+            kioskId = existingProduct.kioskId;
+            console.log("[DEV] Found existing kioskId from products:", kioskId);
+          }
+        } catch {
+          // No existing products
+        }
+      }
+
+      // 3. Last resort — create a new kiosk
+      if (!kioskId) {
+        try {
+          const kiosk = await pb.collection("kiosks").create({
+            tenantId: license.tenantId,
+            name: `Dev Kiosk`,
+            licenseKey: DEV_LICENSE_KEY,
+            status: "active",
+            lastSeen: new Date().toISOString(),
+          });
+          kioskId = kiosk.id;
+        } catch {
+          // kiosks collection might not exist — generate a stable ID
+          kioskId = `kiosk_${license.tenantId}`;
+        }
+      }
+
+      await saveLicenseData(DEV_LICENSE_KEY, license.tenantId, kioskId);
+      console.log("[DEV] License activated, kioskId:", kioskId);
     }
 
     // 3. Login if needed

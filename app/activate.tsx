@@ -106,9 +106,9 @@ export default function ActivateScreen() {
         {/* Logo */}
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>EK</Text>
+            <Text style={styles.logoText}>CR</Text>
           </View>
-          <Text style={styles.title}>Elo Kiosk</Text>
+          <Text style={styles.title}>Corevo</Text>
           <Text style={styles.subtitle}>Aktivera din kiosk</Text>
         </View>
 

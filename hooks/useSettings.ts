@@ -26,6 +26,12 @@ export function useSettings() {
     refresh();
   }, [refresh]);
 
+  // Auto-refresh — poll every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(refresh, 30000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
   const save = useCallback(async (updates: Partial<KioskSettings>) => {
     await updateSettings(updates);
     setSettings((prev) => ({ ...prev, ...updates }));

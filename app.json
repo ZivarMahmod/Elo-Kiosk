@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Elo Kiosk",
-    "slug": "elo-kiosk",
-    "version": "1.0.0",
+    "name": "Corevo Kiosk",
+    "slug": "corevo-kiosk",
+    "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
-    "scheme": "elo-kiosk",
+    "scheme": "corevo-kiosk",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -18,7 +18,8 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#2c3e35"
       },
-      "package": "com.elokiosk.app",
+      "package": "com.corevo.kiosk",
+      "versionCode": 2,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.VIBRATE"
@@ -27,7 +28,7 @@
       "softwareKeyboardLayoutMode": "pan"
     },
     "ios": {
-      "bundleIdentifier": "com.elokiosk.app",
+      "bundleIdentifier": "com.corevo.kiosk",
       "supportsTablet": true
     },
     "plugins": [

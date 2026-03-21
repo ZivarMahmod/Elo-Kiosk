@@ -16,9 +16,11 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import pb, { saveAuthStore, getLicenseData } from "@/core/sync/pocketbase";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
 
 export default function RegisterScreen() {
   const router = useRouter();
+  const { branding } = useTenantBranding();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -90,9 +92,12 @@ export default function RegisterScreen() {
         {/* Logo area */}
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>EK</Text>
+            <Text style={styles.logoText}>CR</Text>
           </View>
-          <Text style={styles.title}>Elo Kiosk</Text>
+          <Text style={styles.title}>{branding.companyName}</Text>
+          {branding.showCobranding && (
+            <Text style={[styles.subtitle, { marginBottom: 4 }]}>Powered by Corevo</Text>
+          )}
           <Text style={styles.subtitle}>Skapa ett nytt konto</Text>
         </View>
 

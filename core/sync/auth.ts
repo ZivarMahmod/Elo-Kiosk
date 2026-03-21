@@ -11,7 +11,7 @@ import pb, {
   loadAuthStore,
   clearAuthStore,
   getLicenseData,
-  clearLicenseData,
+  saveLicenseData,
 } from "./pocketbase";
 import type { AuthState } from "../types/kiosk";
 
@@ -42,11 +42,30 @@ export async function loginOrRegister(
     await pb.collection("users").authWithPassword(normalizedEmail, password);
     await saveAuthStore();
 
-    // Try to find a kiosk linked to this user's tenant
+    // Check if we already have a kioskId saved (survives logout)
     const license = await getLicenseData();
-    const kioskId = license.kioskId ?? undefined;
+    if (license.kioskId) {
+      // Reconnect to existing kiosk — all data is preserved
+      return { success: true, kioskId: license.kioskId };
+    }
 
-    return { success: true, kioskId };
+    // No saved kioskId — try to find one via the user's tenant
+    // This handles the "new device, same account" scenario
+    if (license.tenantId) {
+      try {
+        const kiosk = await pb.collection("kiosks").getFirstListItem(
+          `tenantId = "${license.tenantId}"`
+        );
+        if (kiosk) {
+          await saveLicenseData(license.licenseKey || "", license.tenantId, kiosk.id);
+          return { success: true, kioskId: kiosk.id };
+        }
+      } catch {
+        // No kiosk found for tenant — will be created by bootstrap
+      }
+    }
+
+    return { success: true, kioskId: undefined };
   } catch (err: any) {
     console.error("[Auth] PocketBase login failed:", err);
 
@@ -88,9 +107,13 @@ export async function getAuthState(): Promise<AuthState> {
 }
 
 /**
- * Logout — clears PocketBase auth + license data
+ * Logout — clears PocketBase auth but KEEPS license/kiosk data.
+ * The kioskId and license are tied to this device, not the user session.
+ * This way, re-login reconnects to the same kiosk with all its data.
  */
 export async function logout(): Promise<void> {
   await clearAuthStore();
-  await clearLicenseData();
+  // NOTE: We intentionally do NOT call clearLicenseData() here.
+  // License key, tenantId, and kioskId must survive logout/re-login
+  // so the kiosk reconnects to its existing data.
 }

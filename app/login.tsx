@@ -16,11 +16,13 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { useAuth } from "@/hooks/useAuth";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
 import pb from "@/core/sync/pocketbase";
 
 export default function LoginScreen() {
   const router = useRouter();
   const { login } = useAuth();
+  const { branding } = useTenantBranding();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -74,9 +76,12 @@ export default function LoginScreen() {
         {/* Logo area */}
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>EK</Text>
+            <Text style={styles.logoText}>CR</Text>
           </View>
-          <Text style={styles.title}>Elo Kiosk</Text>
+          <Text style={styles.title}>{branding.companyName}</Text>
+          {branding.showCobranding && (
+            <Text style={[styles.subtitle, { marginBottom: 4 }]}>Powered by Corevo</Text>
+          )}
           <Text style={styles.subtitle}>Logga in med ditt konto</Text>
         </View>
 

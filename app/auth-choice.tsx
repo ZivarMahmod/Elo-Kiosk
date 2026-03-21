@@ -5,9 +5,11 @@
 
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
 
 export default function AuthChoiceScreen() {
   const router = useRouter();
+  const { branding } = useTenantBranding();
 
   return (
     <View style={styles.container}>
@@ -15,9 +17,12 @@ export default function AuthChoiceScreen() {
         {/* Logo */}
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>EK</Text>
+            <Text style={styles.logoText}>CR</Text>
           </View>
-          <Text style={styles.title}>Elo Kiosk</Text>
+          <Text style={styles.title}>{branding.companyName}</Text>
+          {branding.showCobranding && (
+            <Text style={[styles.subtitle, { marginBottom: 4 }]}>Powered by Corevo</Text>
+          )}
           <Text style={styles.subtitle}>Välkommen! Hur vill du fortsätta?</Text>
         </View>
 

@@ -69,7 +69,7 @@ function generateReceiptHTML(data: EmailReceiptData): string {
 
         <!-- Footer -->
         <p style="text-align:center;color:#8a9b93;font-size:11px;margin-top:16px">
-          Skickat från ${data.storeName} via Elo Kiosk
+          Skickat från ${data.storeName} via Corevo
         </p>
       </div>
     </body>

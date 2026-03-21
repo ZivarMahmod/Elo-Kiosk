@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSettings } from "@/hooks/useSettings";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
 import type { KioskSettings, OpeningHours } from "@/core/types/settings";
 
 const DAY_LABELS: Record<string, string> = {
@@ -20,9 +21,10 @@ const DAY_LABELS: Record<string, string> = {
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const FONTS = ["Inter", "Roboto", "Open Sans", "Lato", "Montserrat", "Poppins"];
 
-type SettingsTab = "store" | "payment" | "theme" | "kiosk" | "hours" | "advanced";
+type SettingsTab = "store" | "payment" | "theme" | "kiosk" | "hours" | "advanced" | "branding";
 const TABS: { key: SettingsTab; label: string; icon: string }[] = [
   { key: "store", label: "Butik", icon: "storefront-outline" },
+  { key: "branding", label: "Varumärke", icon: "ribbon-outline" },
   { key: "payment", label: "Betalning", icon: "card-outline" },
   { key: "theme", label: "Utseende", icon: "color-palette-outline" },
   { key: "kiosk", label: "Kiosk", icon: "tv-outline" },
@@ -32,7 +34,9 @@ const TABS: { key: SettingsTab; label: string; icon: string }[] = [
 
 export default function SettingsPage() {
   const { settings, loading, save, refresh } = useSettings();
+  const { branding, update: updateBranding } = useTenantBranding();
   const [form, setForm] = useState<KioskSettings>(settings);
+  const [brandingForm, setBrandingForm] = useState(branding);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>("store");
 
@@ -40,6 +44,11 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!loading) setForm(settings);
   }, [loading]);
+
+  // Sync branding form
+  useEffect(() => {
+    setBrandingForm(branding);
+  }, [branding]);
 
   const update = useCallback((key: keyof KioskSettings, value: any) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -96,7 +105,7 @@ export default function SettingsPage() {
       <>
       <Section icon="storefront-outline" title="Butiksinformation">
         <Row label="Butiksnamn">
-          <Input value={form.storeName} onChange={(v) => update("storeName", v)} placeholder="Elo Kiosk" />
+          <Input value={form.storeName} onChange={(v) => update("storeName", v)} placeholder="Corevo Kiosk" />
         </Row>
         <Row label="Undertitel">
           <Input value={form.storeSubtitle} onChange={(v) => update("storeSubtitle", v)} placeholder="Hemmets bästa hörna" />
@@ -126,9 +135,9 @@ export default function SettingsPage() {
           <Input value={form.swishNumber} onChange={(v) => update("swishNumber", v)} placeholder="07XXXXXXXX" />
         </Row>
         <Row label="Kvittoprefix">
-          <Input value={form.receiptPrefix} onChange={(v) => update("receiptPrefix", v)} placeholder="EK" />
+          <Input value={form.receiptPrefix} onChange={(v) => update("receiptPrefix", v)} placeholder="CR" />
         </Row>
-        <Hint text="T.ex. EK ger kvitto EK-0001" />
+        <Hint text="T.ex. CR ger kvitto CR-0001" />
         <Text style={styles.subLabel}>Betalmetoder aktiverade</Text>
         <SwitchRow label="Swish" value={form.paymentSwish} onChange={(v) => update("paymentSwish", v)} />
         <SwitchRow label="Kort" value={form.paymentCard} onChange={(v) => update("paymentCard", v)} />
@@ -312,9 +321,9 @@ export default function SettingsPage() {
         {form.orderQueueEnabled && (
           <>
             <Row label="Könummerformat">
-              <Input value={form.orderQueueFormat} onChange={(v) => update("orderQueueFormat", v)} placeholder="EK-####" />
+              <Input value={form.orderQueueFormat} onChange={(v) => update("orderQueueFormat", v)} placeholder="CR-####" />
             </Row>
-            <Hint text="Använd # för siffror, t.ex. EK-#### ger EK-0001" />
+            <Hint text="Använd # för siffror, t.ex. CR-#### ger CR-0001" />
           </>
         )}
       </Section>
@@ -356,6 +365,49 @@ export default function SettingsPage() {
         <Hint text="Återställ kiosken efter inaktivitet" />
       </Section>
 
+      </>
+      )}
+
+      {/* ═══ VARUMÄRKE ═══ */}
+      {activeTab === "branding" && (
+      <>
+      <Section icon="ribbon-outline" title="Varumärke">
+        <SwitchRow
+          label="Visa 'Powered by Corevo'"
+          hint="Visar co-branding text i kiosken, login och screensaver"
+          value={brandingForm.showCobranding}
+          onChange={(v) => setBrandingForm((prev) => ({ ...prev, showCobranding: v }))}
+        />
+        <Row label="Anpassad text">
+          <Input
+            value={brandingForm.poweredByText}
+            onChange={(v) => setBrandingForm((prev) => ({ ...prev, poweredByText: v }))}
+            placeholder="Powered by Corevo"
+          />
+        </Row>
+        <Hint text="Texten som visas i kiosken och på login-skärmarna" />
+
+        <TouchableOpacity
+          style={[styles.saveButton, saving && { opacity: 0.6 }, { marginTop: 16 }]}
+          onPress={async () => {
+            setSaving(true);
+            try {
+              await updateBranding(brandingForm);
+              Alert.alert("Sparat", "Varumärkesinställningar har sparats till PocketBase.");
+            } catch (err) {
+              Alert.alert("Fel", "Kunde inte spara varumärkesinställningar. Kontrollera att tenants-kollektionen finns i PocketBase.");
+            } finally {
+              setSaving(false);
+            }
+          }}
+          disabled={saving}
+        >
+          <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
+          <Text style={styles.saveButtonText}>
+            {saving ? "Sparar..." : "Spara varumärke"}
+          </Text>
+        </TouchableOpacity>
+      </Section>
       </>
       )}
 

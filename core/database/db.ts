@@ -217,7 +217,7 @@ export async function getDatabase(): Promise<DatabaseInterface> {
 
   // Native: use expo-sqlite
   const SQLite = require("expo-sqlite");
-  const nativeDb = await SQLite.openDatabaseAsync("elo-kiosk.db");
+  const nativeDb = await SQLite.openDatabaseAsync("corevo-kiosk.db");
   _db = nativeDb;
   await initializeDatabase(_db!);
   return _db!;

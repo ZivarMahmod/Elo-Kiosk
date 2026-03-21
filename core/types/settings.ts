@@ -88,7 +88,7 @@ export interface KioskSettings {
 }
 
 export const DEFAULT_SETTINGS: KioskSettings = {
-  storeName: "Elo Kiosk",
+  storeName: "Corevo Kiosk",
   storeSubtitle: "",
   companyAddress: "",
   orgNumber: "",
@@ -100,7 +100,7 @@ export const DEFAULT_SETTINGS: KioskSettings = {
   paymentCard: false,
   paymentCash: false,
   paymentQR: false,
-  receiptPrefix: "EK",
+  receiptPrefix: "CR",
 
   primaryColor: "#2d6b5a",
   secondaryColor: "#d4a574",
@@ -150,7 +150,7 @@ export const DEFAULT_SETTINGS: KioskSettings = {
   tipAmount2: 20,
   tipAmount3: 50,
   orderQueueEnabled: true,
-  orderQueueFormat: "EK-####",
+  orderQueueFormat: "CR-####",
 
   receiptLogoUrl: "",
   receiptThankYou: "Tack för ditt köp!",

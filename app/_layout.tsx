@@ -45,7 +45,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" />
         <Stack.Screen name="login" />
         <Stack.Screen name="mode-select" />
-        <Stack.Screen name="(kiosk)" />
+        <Stack.Screen name="(kiosk)" options={{ contentStyle: { backgroundColor: "transparent" } }} />
         <Stack.Screen name="(admin)" />
       </Stack>
     </>

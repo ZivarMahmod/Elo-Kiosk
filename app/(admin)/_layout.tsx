@@ -62,8 +62,8 @@ export default function AdminLayout() {
         {/* Top bar */}
         <View style={s.mobileTopBar}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <View style={s.miniLogo}><Text style={s.miniLogoText}>EK</Text></View>
-            <Text style={s.mobileTitle}>Elo Kiosk</Text>
+            <View style={s.miniLogo}><Text style={s.miniLogoText}>CR</Text></View>
+            <Text style={s.mobileTitle}>Corevo Admin</Text>
           </View>
           <TouchableOpacity style={s.hamburger} onPress={() => setDrawerOpen(true)}>
             <Ionicons name="menu-outline" size={24} color="#2c3e35" />
@@ -101,8 +101,8 @@ export default function AdminLayout() {
           <Pressable style={s.drawerOverlay} onPress={() => setDrawerOpen(false)}>
             <Pressable style={s.drawer} onPress={(e) => e.stopPropagation()}>
               <View style={s.drawerHeader}>
-                <View style={s.logoCircle}><Text style={s.logoText}>EK</Text></View>
-                <Text style={s.brandText}>Elo Kiosk</Text>
+                <View style={s.logoCircle}><Text style={s.logoText}>CR</Text></View>
+                <Text style={s.brandText}>Corevo Admin</Text>
                 <Text style={s.modeText}>Admin-läge</Text>
               </View>
               <ScrollView style={s.drawerNav}>
@@ -140,7 +140,7 @@ export default function AdminLayout() {
       <View style={s.container}>
         <View style={s.tabletSidebar}>
           <View style={{ alignItems: "center", paddingVertical: 12 }}>
-            <View style={s.miniLogo}><Text style={s.miniLogoText}>EK</Text></View>
+            <View style={s.miniLogo}><Text style={s.miniLogoText}>CR</Text></View>
           </View>
           <ScrollView style={s.navList}>
             {NAV_ITEMS.map((item) => {
@@ -170,8 +170,8 @@ export default function AdminLayout() {
     <View style={s.container}>
       <View style={s.sidebar}>
         <View style={s.sidebarHeader}>
-          <View style={s.logoCircle}><Text style={s.logoText}>EK</Text></View>
-          <Text style={s.brandText}>Elo Kiosk</Text>
+          <View style={s.logoCircle}><Text style={s.logoText}>CR</Text></View>
+          <Text style={s.brandText}>Corevo Admin</Text>
           <Text style={s.modeText}>Admin-läge</Text>
         </View>
 

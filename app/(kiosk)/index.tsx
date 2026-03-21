@@ -8,7 +8,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Modal, TextInput, Alert, Animated,
-  useWindowDimensions,
+  useWindowDimensions, Image, ImageBackground,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,6 +22,58 @@ import type { Product } from "@/core/types/product";
 import type { Category } from "@/core/types/category";
 import QRCode from "react-native-qrcode-svg";
 import { enterKioskMode } from "@/core/kiosk/android-kiosk";
+import { getAuthState } from "@/core/sync/auth";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
+import PocketBase from "pocketbase";
+
+// ═══ PRODUCT IMAGES — local assets ═══
+const PRODUCT_IMAGES: Record<string, ReturnType<typeof require>> = {
+  "bonaqua": require("@/assets/images/bonaqua.png"),
+  "celsius": require("@/assets/images/celsius.png"),
+  "cola-zero": require("@/assets/images/cola-zero.png"),
+  "coca-cola-zero": require("@/assets/images/cola-zero.png"),
+  "fanta": require("@/assets/images/fanta.png"),
+  "fanta-orange": require("@/assets/images/fanta.png"),
+  "nocco": require("@/assets/images/nocco.png"),
+  "monster": require("@/assets/images/monster.png"),
+  "monster-energy": require("@/assets/images/monster.png"),
+  "pepsi-max": require("@/assets/images/pepsi-max.png"),
+  "red-bull": require("@/assets/images/redbull.png"),
+  "redbull": require("@/assets/images/redbull.png"),
+  "trocadero": require("@/assets/images/trocadero.png"),
+  "lofbergs": require("@/assets/images/löfbergs.png"),
+  "lofbergs-kaffe": require("@/assets/images/löfbergs.png"),
+  "lantchips": require("@/assets/images/lantchips.png"),
+  "svenska-lantchips": require("@/assets/images/lantchips.png"),
+  "pringles": require("@/assets/images/pringles.png"),
+  "kexchoklad": require("@/assets/images/kexchoklad.png"),
+  "cornybigg": require("@/assets/images/cornybigg.png"),
+  "corny-bigg": require("@/assets/images/cornybigg.png"),
+  "corny-big": require("@/assets/images/cornybigg.png"),
+  "flapjack": require("@/assets/images/flapjack.png"),
+  "delicatoboll": require("@/assets/images/delicatoboll.png"),
+  "sportlunch": require("@/assets/images/sportlunch.png"),
+  "sportlunch-dubbel": require("@/assets/images/sportlunch.png"),
+  "punchrulle": require("@/assets/images/punchrulle.png"),
+  "proteinbar": require("@/assets/images/proteinbar.png"),
+  "arla-pudding": require("@/assets/images/Arla-pudding.png"),
+  "arla-proteinpudding": require("@/assets/images/Arla-pudding.png"),
+  "risifrutti": require("@/assets/images/risifrutti.png"),
+  "nudlar": require("@/assets/images/nudlar.png"),
+  "billys-pan-pizza": require("@/assets/images/billys-pan-pizza.png"),
+  "billys-pan-pizza-original": require("@/assets/images/billys-pan-pizza.png"),
+  "billys-pan-pizza-hawaii": require("@/assets/images/billys-pan-pizza-hawaii.png"),
+  "billys-pan-pizza-veggie": require("@/assets/images/billys-pan-pizza-veggie.png"),
+};
+
+const getLocalImage = (name: string) => {
+  const key = name
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[åä]/g, "a")
+    .replace(/ö/g, "o");
+  return PRODUCT_IMAGES[key] ?? null;
+};
 
 type KioskView = "overview" | "category";
 type PayMethod = "swish" | "card" | "cash";
@@ -39,6 +91,7 @@ export default function KioskScreen() {
   const { categories, loading: catLoading } = useCategories(true);
   const { products, loading: prodLoading, getByCategory } = useProducts(true);
   const { settings } = useSettings();
+  const { branding } = useTenantBranding();
 
   const [currentView, setCurrentView] = useState<KioskView>("overview");
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
@@ -55,9 +108,12 @@ export default function KioskScreen() {
   const [selectedTip, setSelectedTip] = useState(0);
   const [queueNumber, setQueueNumber] = useState("");
 
-  // Admin exit
+  // Admin exit — 5-tap secret on logo
   const [showAdminAuth, setShowAdminAuth] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const tapCountRef = useRef(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Screensaver
   const [showScreensaver, setShowScreensaver] = useState(false);
@@ -173,7 +229,7 @@ export default function KioskScreen() {
     setCart((prev) => {
       const existing = prev.find((i) => i.productId === product.id);
       if (existing) return prev.map((i) => i.productId === product.id ? { ...i, qty: i.qty + 1 } : i);
-      return [...prev, { productId: product.id, name: product.name, price: product.campaignPrice ?? product.price, qty: 1 }];
+      return [...prev, { productId: product.id, name: product.name, price: (product.campaignPrice && product.campaignPrice > 0) ? product.campaignPrice : product.price, qty: 1 }];
     });
     resetScreensaverTimer();
   };
@@ -195,7 +251,7 @@ export default function KioskScreen() {
 
   // ═══ PAYMENT ═══
   const handlePay = () => {
-    if (subtotal <= 0) return;
+    if (cart.length === 0) return;
     if (settings.ordersPaused) {
       Alert.alert("Beställningar pausade", settings.pauseMessage || "Vi tar en kort paus. Försök igen snart!");
       return;
@@ -204,7 +260,7 @@ export default function KioskScreen() {
     setReceiptId(id);
     setSelectedTip(0);
     setSelectedPayMethod(payMethods[0]?.key || "swish");
-    setCountdown(20);
+    setCountdown(120);
     setShowPayment(true);
     if (settings.orderQueueEnabled) {
       setQueueNumber(generateQueueNumber());
@@ -235,7 +291,7 @@ export default function KioskScreen() {
     }
     setShowPayment(false);
     setShowReceipt(true);
-    setCountdown(20);
+    setCountdown(15);
   };
 
   const handleCloseReceipt = () => {
@@ -257,11 +313,44 @@ export default function KioskScreen() {
   }, [countdown, showPayment, showReceipt]);
 
   // ═══ PRODUCT CARD WIDTH ═══
+  // ═══ 5-TAP SECRET EXIT ═══
+  const handleLogoTap = useCallback(() => {
+    tapCountRef.current += 1;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    if (tapCountRef.current >= 5) {
+      tapCountRef.current = 0;
+      setShowAdminAuth(true);
+      setAdminPassword("");
+      setAuthError("");
+    } else {
+      tapTimerRef.current = setTimeout(() => {
+        tapCountRef.current = 0;
+      }, 2000);
+    }
+  }, []);
+
+  const handleAdminUnlock = useCallback(async () => {
+    if (!adminPassword.trim()) return;
+    try {
+      const auth = await getAuthState();
+      if (!auth.email) {
+        setAuthError("Ingen inloggad användare hittad");
+        return;
+      }
+      const pb = new PocketBase("https://elo-kiosk-pb.fly.dev");  // PocketBase URL stays the same
+      await pb.collection("users").authWithPassword(auth.email, adminPassword);
+      setShowAdminAuth(false);
+      setAdminPassword("");
+      router.replace("/mode-select");
+    } catch (_err) {
+      setAuthError("Fel lösenord. Försök igen.");
+      setAdminPassword("");
+    }
+  }, [adminPassword, router]);
+
   const productWidth = useMemo(() => {
-    const cols = theme.perRow || 3;
-    const pct = Math.floor(100 / cols) - 2;
-    return `${pct}%` as any;
-  }, [theme.perRow]);
+    return "23%" as any;
+  }, []);
 
   // ═══ LOADING ═══
   if (catLoading || prodLoading) {
@@ -282,18 +371,22 @@ export default function KioskScreen() {
           <Text style={[ds.pauseTitle, { color: theme.text }]}>Beställningar pausade</Text>
           <Text style={[ds.pauseMsg, { color: theme.text + "80" }]}>{settings.pauseMessage || "Vi tar en kort paus. Vi är snart tillbaka!"}</Text>
         </View>
-        <TouchableOpacity style={ds.exitBtn} onPress={() => {
-          if (settings.kioskLocked && settings.kioskPassword) { setShowAdminAuth(true); setAdminPassword(""); }
-          else router.replace("/mode-select");
-        }}>
-          <Ionicons name="exit-outline" size={18} color="#6b7c74" />
-        </TouchableOpacity>
+        {!settings.kioskLocked && (
+          <TouchableOpacity style={ds.exitBtn} onPress={() => router.replace("/mode-select")} activeOpacity={0.7}>
+            <Ionicons name="exit-outline" size={18} color="#6b7c74" />
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
 
   return (
-    <View style={[ds.stage, { backgroundColor: "#e8f0ec" }]} onTouchStart={resetScreensaverTimer}>
+    <ImageBackground
+      source={require("@/assets/images/background.png")}
+      style={{ flex: 1 }}
+      resizeMode="cover"
+    >
+    <View style={[ds.stage, { backgroundColor: "transparent" }]} onTouchStart={resetScreensaverTimer}>
       {/* ═══ EMERGENCY MESSAGE ═══ */}
       {settings.emergencyMessage ? (
         <View style={ds.emergencyBar}>
@@ -304,15 +397,19 @@ export default function KioskScreen() {
 
       {/* ═══ TOP BAR ═══ */}
       <View style={[ds.topBar, { borderRadius: 0 }]}>
-        <Text style={[ds.topBarTitle, { color: theme.text, fontSize: 28 * theme.fontSize }]}>{settings.storeName || "Elo Kiosk"}</Text>
+        <TouchableOpacity onPress={handleLogoTap} activeOpacity={1}>
+          <Text style={[ds.topBarTitle, { color: theme.text, fontSize: 28 * theme.fontSize }]}>{branding.companyName}</Text>
+        </TouchableOpacity>
         <View style={ds.topBarRight}>
+          {branding.showCobranding && (
+            <Text style={[ds.topBarHint, { fontSize: 11 * theme.fontSize, marginRight: 12, opacity: 0.6 }]}>{branding.poweredByText}</Text>
+          )}
           <Text style={[ds.topBarHint, { fontSize: 12 * theme.fontSize }]}>VÄLJ → LÄGG I VAGNEN → BETALA</Text>
-          <TouchableOpacity style={ds.exitBtnSmall} onPress={() => {
-            if (settings.kioskLocked && settings.kioskPassword) { setShowAdminAuth(true); setAdminPassword(""); }
-            else router.replace("/mode-select");
-          }}>
-            <Ionicons name="exit-outline" size={18} color="#6b7c74" />
-          </TouchableOpacity>
+          {!settings.kioskLocked && (
+            <TouchableOpacity style={ds.exitBtnSmall} onPress={() => router.replace("/mode-select")} activeOpacity={0.7}>
+              <Ionicons name="exit-outline" size={18} color="#6b7c74" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -382,7 +479,7 @@ export default function KioskScreen() {
           ) : selectedCategory ? (
             <View style={ds.categoryPage}>
               <View style={ds.categoryTop}>
-                <TouchableOpacity style={[ds.backBtn, { borderRadius: theme.radius + 2 }]} onPress={goHome}>
+                <TouchableOpacity style={[ds.backBtn, { borderRadius: theme.radius + 2 }]} onPress={goHome} activeOpacity={0.7}>
                   <Ionicons name="arrow-back-outline" size={20} color={theme.text} />
                   <Text style={[ds.backBtnText, { fontSize: 16 * theme.fontSize }]}>Tillbaka</Text>
                 </TouchableOpacity>
@@ -394,14 +491,27 @@ export default function KioskScreen() {
               <ScrollView style={ds.productScrollView} contentContainerStyle={ds.productGrid}>
                 {categoryProducts.map((product) => {
                   const q = getQty(product.id);
-                  const displayPrice = product.campaignPrice ?? product.price;
+                  const displayPrice = (product.campaignPrice && product.campaignPrice > 0) ? product.campaignPrice : product.price;
                   const isOutOfStock = product.stockStatus === "slut" || (product.quantity != null && product.quantity <= 0);
                   return (
-                    <View key={product.id} style={[ds.productCard, { width: productWidth, borderRadius: theme.radius + 4, opacity: isOutOfStock ? 0.5 : 1 }]}>
-                      <View style={[ds.productImgBox, { backgroundColor: theme.bg }]}>
-                        <Text style={ds.productEmoji}>{selectedCategory.emoji || "🛒"}</Text>
+                    <View key={product.id} style={{
+                      width: productWidth,
+                      backgroundColor: "rgba(255,255,255,0.75)",
+                      borderRadius: 16,
+                      borderWidth: 1,
+                      borderColor: "rgba(0,0,0,0.06)",
+                      overflow: "hidden",
+                      opacity: isOutOfStock ? 0.5 : 1,
+                    }}>
+                      {/* Large image area */}
+                      <View style={{ height: 140, justifyContent: "center", alignItems: "center", paddingVertical: 8 }}>
+                        {getLocalImage(product.name) ? (
+                          <Image source={getLocalImage(product.name)!} style={{ width: "85%", height: "100%" }} resizeMode="contain" />
+                        ) : (
+                          <Text style={{ fontSize: 52 }}>{selectedCategory.emoji || "🛒"}</Text>
+                        )}
                         {product.badgeLabel ? (
-                          <View style={[ds.badge, { backgroundColor: product.badgeColor || theme.accent, borderRadius: theme.radius }]}>
+                          <View style={[ds.badge, { backgroundColor: product.badgeColor || theme.accent, borderRadius: 8 }]}>
                             <Text style={ds.badgeText}>{product.badgeLabel}</Text>
                           </View>
                         ) : null}
@@ -409,25 +519,38 @@ export default function KioskScreen() {
                           <View style={ds.outOfStockBadge}><Text style={ds.outOfStockText}>SLUT</Text></View>
                         )}
                       </View>
-                      <View style={ds.productInfoBox}>
-                        <Text style={[ds.productName, { color: theme.text, fontSize: 15 * theme.fontSize }]} numberOfLines={2}>{product.name}</Text>
-                        <View style={ds.priceRow}>
-                          <Text style={[ds.productPrice, { color: theme.secondary, fontSize: 15 * theme.fontSize }]}>{displayPrice} kr</Text>
-                          {product.campaignPrice != null && product.campaignPrice < product.price && (
-                            <Text style={[ds.originalPrice, { fontSize: 12 * theme.fontSize }]}>{product.price} kr</Text>
+                      {/* Slim info row */}
+                      <View style={{ paddingHorizontal: 12, paddingBottom: 10, paddingTop: 4 }}>
+                        <Text style={{ fontWeight: "700", color: "#1a1a1a", fontSize: 15 * theme.fontSize }} numberOfLines={1}>{product.name}</Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+                          <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                            <Text style={{ fontWeight: "700", color: theme.primary, fontSize: 16 * theme.fontSize }}>{displayPrice} kr</Text>
+                            {product.campaignPrice != null && product.campaignPrice > 0 && product.campaignPrice < product.price && (
+                              <Text style={{ color: "#aaa", textDecorationLine: "line-through", fontSize: 12 * theme.fontSize }}>{product.price} kr</Text>
+                            )}
+                          </View>
+                          {!isOutOfStock && (
+                            q === 0 ? (
+                              <TouchableOpacity
+                                onPress={() => addToCart(product)}
+                                style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: theme.primary, justifyContent: "center", alignItems: "center" }}
+                                activeOpacity={0.7}
+                              >
+                                <Ionicons name="add" size={22} color="#fff" />
+                              </TouchableOpacity>
+                            ) : (
+                              <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "rgba(0,0,0,0.04)", borderRadius: 20, paddingHorizontal: 4, height: 36 }}>
+                                <TouchableOpacity onPress={() => updateQty(product.id, -1)} style={{ width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center" }} activeOpacity={0.7}>
+                                  <Ionicons name="remove" size={18} color="#d94f4f" />
+                                </TouchableOpacity>
+                                <Text style={{ fontWeight: "700", color: "#1a1a1a", fontSize: 16, minWidth: 24, textAlign: "center" }}>{q}</Text>
+                                <TouchableOpacity onPress={() => addToCart(product)} style={{ width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center" }} activeOpacity={0.7}>
+                                  <Ionicons name="add" size={18} color={theme.primary} />
+                                </TouchableOpacity>
+                              </View>
+                            )
                           )}
                         </View>
-                        {!isOutOfStock && (
-                          <View style={ds.qtyRow}>
-                            <TouchableOpacity style={[ds.qtyBtn, { borderRadius: theme.radius }, q === 0 && ds.qtyBtnDim]} onPress={() => updateQty(product.id, -1)}>
-                              <Ionicons name="remove" size={18} color="#5b8fa8" />
-                            </TouchableOpacity>
-                            <Text style={[ds.qtyVal, { color: theme.text, fontSize: 18 * theme.fontSize }]}>{q}</Text>
-                            <TouchableOpacity style={[ds.qtyBtn, { borderRadius: theme.radius, backgroundColor: q > 0 ? theme.primary + "20" : "rgba(91,143,168,0.12)" }]} onPress={() => addToCart(product)}>
-                              <Ionicons name="add" size={18} color={q > 0 ? theme.primary : "#5b8fa8"} />
-                            </TouchableOpacity>
-                          </View>
-                        )}
                       </View>
                     </View>
                   );
@@ -454,7 +577,7 @@ export default function KioskScreen() {
                     <Text style={ds.cartItemQty}>{item.qty} st × {item.price} kr</Text>
                   </View>
                   <Text style={[ds.cartItemPrice, { fontSize: 15 * theme.fontSize }]}>{item.price * item.qty} kr</Text>
-                  <TouchableOpacity style={ds.cartItemRemove} onPress={() => updateQty(item.productId, -1)}>
+                  <TouchableOpacity style={ds.cartItemRemove} onPress={() => updateQty(item.productId, -1)} activeOpacity={0.7}>
                     <Ionicons name="close-circle-outline" size={18} color="#c4a0a0" />
                   </TouchableOpacity>
                 </View>
@@ -476,6 +599,7 @@ export default function KioskScreen() {
                         backgroundColor: selectedTip === amount ? theme.primary : "#f5f5f5",
                       }]}
                       onPress={() => setSelectedTip(amount)}
+                      activeOpacity={0.7}
                     >
                       <Text style={[ds.tipBtnText, { color: selectedTip === amount ? "#fff" : theme.text }]}>
                         {amount === 0 ? "Ingen" : `${amount} kr`}
@@ -502,18 +626,20 @@ export default function KioskScreen() {
             </View>
 
             <TouchableOpacity
-              style={[ds.payBtn, { borderRadius: theme.radius + 2, backgroundColor: theme.primary, opacity: subtotal <= 0 ? 0.35 : 1 }]}
+              style={[ds.payBtn, { borderRadius: theme.radius + 2, backgroundColor: theme.primary, opacity: cart.length === 0 ? 0.35 : 1 }]}
               onPress={handlePay}
-              disabled={subtotal <= 0}
+              disabled={cart.length === 0}
+              activeOpacity={0.7}
             >
               <Ionicons name="wallet-outline" size={20} color="#fff" />
               <Text style={[ds.payBtnText, { fontSize: 20 * theme.fontSize }]}>Betala {total > 0 ? `${total} kr` : ""}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[ds.clearBtn, { borderRadius: theme.radius + 2, opacity: subtotal <= 0 ? 0.3 : 1 }]}
+              style={[ds.clearBtn, { borderRadius: theme.radius + 2, opacity: cart.length === 0 ? 0.3 : 1 }]}
               onPress={clearCart}
-              disabled={subtotal <= 0}
+              disabled={cart.length === 0}
+              activeOpacity={0.7}
             >
               <Text style={[ds.clearBtnText, { fontSize: 14 * theme.fontSize }]}>Rensa val</Text>
             </TouchableOpacity>
@@ -541,6 +667,7 @@ export default function KioskScreen() {
                     key={m.key}
                     style={[ds.payMethodBtn, { borderRadius: theme.radius, backgroundColor: selectedPayMethod === m.key ? theme.primary : "#f5f5f5" }]}
                     onPress={() => setSelectedPayMethod(m.key)}
+                    activeOpacity={0.7}
                   >
                     <Ionicons name={m.icon as any} size={18} color={selectedPayMethod === m.key ? "#fff" : "#6b7c74"} />
                     <Text style={[ds.payMethodText, { color: selectedPayMethod === m.key ? "#fff" : "#6b7c74" }]}>{m.label}</Text>
@@ -581,12 +708,12 @@ export default function KioskScreen() {
               </View>
             )}
 
-            <TouchableOpacity style={[ds.receiptBtn, { borderRadius: theme.radius + 2 }]} onPress={handleShowReceipt}>
-              <Ionicons name="receipt-outline" size={18} color="#fff" />
-              <Text style={ds.receiptBtnText}>Visa kvitto</Text>
+            <TouchableOpacity style={[ds.receiptBtn, { borderRadius: theme.radius + 2 }]} onPress={handleShowReceipt} activeOpacity={0.7}>
+              <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
+              <Text style={ds.receiptBtnText}>Bekräfta betalning</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={ds.cancelPayBtn} onPress={() => setShowPayment(false)}>
+            <TouchableOpacity style={ds.cancelPayBtn} onPress={() => setShowPayment(false)} activeOpacity={0.7}>
               <Text style={ds.cancelPayText}>Avbryt</Text>
             </TouchableOpacity>
           </View>
@@ -658,7 +785,7 @@ export default function KioskScreen() {
             {settings.receiptFooter ? <Text style={ds.receiptFooter}>{settings.receiptFooter}</Text> : null}
             {settings.orgNumber ? <Text style={ds.receiptOrg}>Org.nr: {settings.orgNumber}</Text> : null}
 
-            <TouchableOpacity style={[ds.receiptCloseBtn, { borderRadius: theme.radius + 2, backgroundColor: theme.primary }]} onPress={handleCloseReceipt}>
+            <TouchableOpacity style={[ds.receiptCloseBtn, { borderRadius: theme.radius + 2, backgroundColor: theme.primary }]} onPress={handleCloseReceipt} activeOpacity={0.7}>
               <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
               <Text style={ds.receiptCloseBtnText}>Klar</Text>
             </TouchableOpacity>
@@ -672,23 +799,21 @@ export default function KioskScreen() {
           <View style={[ds.adminAuthModal, { borderRadius: theme.radius + 12 }]}>
             <Ionicons name="lock-closed-outline" size={32} color={theme.primary} />
             <Text style={[ds.adminAuthTitle, { color: theme.text }]}>Admin-åtkomst</Text>
-            <Text style={ds.adminAuthDesc}>Ange lösenord för att lämna kiosk-läget</Text>
+            <Text style={ds.adminAuthDesc}>Ange ditt kontolösenord för att lämna kiosk-läget</Text>
+            {authError ? <Text style={{ color: "#d94f4f", fontSize: 13, marginBottom: 8 }}>{authError}</Text> : null}
             <TextInput
               style={[ds.adminAuthInput, { borderRadius: theme.radius }]}
               value={adminPassword}
-              onChangeText={setAdminPassword}
+              onChangeText={(t) => { setAdminPassword(t); setAuthError(""); }}
               placeholder="Lösenord"
               placeholderTextColor="#a0a0a0"
               secureTextEntry
               autoFocus
             />
-            <TouchableOpacity style={[ds.adminAuthSubmit, { borderRadius: theme.radius, backgroundColor: theme.primary }]} onPress={() => {
-              if (adminPassword === settings.kioskPassword) { setShowAdminAuth(false); router.replace("/mode-select"); }
-              else { Alert.alert("Fel lösenord", "Försök igen."); setAdminPassword(""); }
-            }}>
+            <TouchableOpacity style={[ds.adminAuthSubmit, { borderRadius: theme.radius, backgroundColor: theme.primary }]} onPress={handleAdminUnlock} activeOpacity={0.7}>
               <Text style={ds.adminAuthSubmitText}>Lås upp</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={ds.adminAuthCancel} onPress={() => setShowAdminAuth(false)}>
+            <TouchableOpacity style={ds.adminAuthCancel} onPress={() => { setShowAdminAuth(false); setAuthError(""); }} activeOpacity={0.7}>
               <Text style={ds.adminAuthCancelText}>Avbryt</Text>
             </TouchableOpacity>
           </View>
@@ -700,13 +825,20 @@ export default function KioskScreen() {
         <TouchableOpacity style={ds.screensaver} activeOpacity={1} onPress={() => { setShowScreensaver(false); resetScreensaverTimer(); }}>
           <View style={ds.ssLogoWrapper}>
             <View style={[ds.ssRing, { borderColor: theme.accent }]} />
-            <Text style={[ds.ssLogo, { color: theme.secondary }]}>EK</Text>
+            <Text style={[ds.ssLogo, { color: theme.secondary }]}>Corevo</Text>
           </View>
+          {branding.showCobranding && (
+            <Text style={[ds.ssTitle, { fontSize: 16, opacity: 0.6, marginBottom: 4 }]}>{branding.poweredByText}</Text>
+          )}
+          {branding.showCobranding && (
+            <Text style={[ds.ssTitle, { fontSize: 18, opacity: 0.7 }]}>{branding.companyName}</Text>
+          )}
           <Text style={ds.ssTitle}>{settings.screensaverText || "Välkommen!"}</Text>
           <Text style={ds.ssHint}>TRYCK VAR SOM HELST FÖR ATT BÖRJA</Text>
         </TouchableOpacity>
       )}
     </View>
+    </ImageBackground>
   );
 }
 
@@ -727,16 +859,16 @@ const ds = StyleSheet.create({
   pauseMsg: { fontSize: 18, textAlign: "center", maxWidth: 400, lineHeight: 26 },
 
   // Top Bar
-  topBar: { height: 52, backgroundColor: "rgba(255,255,255,0.85)", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24 },
+  topBar: { height: 52, backgroundColor: "rgba(255,255,255,0.80)", borderBottomWidth: 1, borderBottomColor: "rgba(0,0,0,0.06)", flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 24 },
   topBarTitle: { fontWeight: "700", fontStyle: "italic" },
-  topBarRight: { flexDirection: "row", alignItems: "center", gap: 16 },
-  topBarHint: { color: "#6b7c74", letterSpacing: 2, textTransform: "uppercase" },
+  topBarRight: { flexDirection: "row", alignItems: "center", gap: 12 },
+  topBarHint: { color: "#6b7c74", letterSpacing: 1.5, textTransform: "uppercase", fontSize: 11 },
   exitBtnSmall: { padding: 8 },
   exitBtn: { position: "absolute", top: 16, right: 16, padding: 8 },
 
   // Body
   body: { flex: 1, flexDirection: "row" },
-  mainContent: { flex: 1 },
+  mainContent: { flex: 1, backgroundColor: "rgba(255,255,255,0.15)" },
 
   // Welcome
   welcomeText: { fontStyle: "italic", marginBottom: 4 },
@@ -752,7 +884,7 @@ const ds = StyleSheet.create({
   sectionLabel: { letterSpacing: 2, color: "#6b7c74", textTransform: "uppercase" },
   sectionTitle: { fontWeight: "700", fontStyle: "italic", marginBottom: 8 },
   catGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  catCard: { width: "23%", minHeight: 140, padding: 16, justifyContent: "flex-end", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", elevation: 4 },
+  catCard: { width: "23%", minHeight: 140, padding: 16, justifyContent: "flex-end", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", borderRadius: 12 },
   catEmoji: { position: "absolute", top: 10, right: 12, fontSize: 40, opacity: 0.6 },
   catName: { fontWeight: "700", fontStyle: "italic", color: "#2c3e35" },
   catSub: { color: "#6b7c74", marginTop: 2 },
@@ -760,7 +892,7 @@ const ds = StyleSheet.create({
   // Offers
   offersTitle: { fontWeight: "700", fontStyle: "italic", marginTop: 8 },
   offersGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  offerCard: { width: "48%", backgroundColor: "#fdf8f0", borderWidth: 1, borderColor: "#e8c87a", padding: 16 },
+  offerCard: { width: "48%", backgroundColor: "rgba(253,248,240,0.85)", borderWidth: 1, borderColor: "#e8c87a", padding: 16, borderRadius: 12 },
   offerBadge: { backgroundColor: "rgba(196,122,58,0.15)", paddingHorizontal: 10, paddingVertical: 3, borderRadius: 6, alignSelf: "flex-start", marginBottom: 8 },
   offerBadgeText: { fontSize: 10, fontWeight: "700", color: "#c47a3a", letterSpacing: 1.5, textTransform: "uppercase" },
   offerTitle2: { fontWeight: "700", fontStyle: "italic", color: "#2c3e35", marginBottom: 4 },
@@ -770,14 +902,14 @@ const ds = StyleSheet.create({
   // Category
   categoryPage: { flex: 1 },
   categoryTop: { flexDirection: "row", alignItems: "center", gap: 14, padding: 16, paddingHorizontal: 24 },
-  backBtn: { backgroundColor: "#ffffff", borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", height: 48, paddingHorizontal: 20, flexDirection: "row", alignItems: "center", gap: 8, elevation: 2 },
+  backBtn: { backgroundColor: "rgba(255,255,255,0.80)", borderWidth: 1, borderColor: "rgba(0,0,0,0.08)", height: 48, paddingHorizontal: 20, flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 12 },
   backBtnText: { color: "#2c3e35" },
   categoryHeading: { fontWeight: "700", fontStyle: "italic" },
 
   // Products
   productScrollView: { flex: 1 },
-  productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingHorizontal: 24, paddingBottom: 24 },
-  productCard: { backgroundColor: "#ffffff", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", overflow: "hidden", elevation: 3 },
+  productGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, paddingHorizontal: 20, paddingBottom: 24 },
+  productCard: { backgroundColor: "rgba(255,255,255,0.75)", borderWidth: 1, borderColor: "rgba(0,0,0,0.06)", overflow: "hidden", borderRadius: 12 },
   productImgBox: { height: 80, justifyContent: "center", alignItems: "center" },
   productEmoji: { fontSize: 36 },
   badge: { position: "absolute", top: 6, left: 6, paddingHorizontal: 8, paddingVertical: 2 },
@@ -795,9 +927,9 @@ const ds = StyleSheet.create({
   qtyVal: { fontWeight: "700", minWidth: 24, textAlign: "center" },
 
   // Cart
-  cartPanel: { width: 320, backgroundColor: "rgba(255,255,255,0.9)", borderLeftWidth: 1, borderLeftColor: "rgba(0,0,0,0.06)" },
-  cartTop: { flex: 1 },
-  cartTopContent: { padding: 16 },
+  cartPanel: { width: 301, backgroundColor: "#fff", overflow: "hidden", marginLeft: -1 },
+  cartTop: { flex: 1, backgroundColor: "transparent" },
+  cartTopContent: { padding: 16, backgroundColor: "transparent" },
   cartTitle: { fontWeight: "700", marginBottom: 12 },
   cartEmptyState: { alignItems: "center", paddingVertical: 30, gap: 10 },
   cartEmpty: { color: "#8a9b93", lineHeight: 22 },
@@ -806,7 +938,7 @@ const ds = StyleSheet.create({
   cartItemQty: { fontSize: 12, color: "#8a9b93", marginTop: 1 },
   cartItemPrice: { fontWeight: "700", color: "#2c3e35" },
   cartItemRemove: { padding: 4 },
-  cartBottom: { borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.06)", padding: 14, gap: 8 },
+  cartBottom: { borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.04)", padding: 14, gap: 6 },
 
   // Tipping
   tipSection: { marginBottom: 8 },
@@ -818,17 +950,17 @@ const ds = StyleSheet.create({
   cartCountRow: { flexDirection: "row", justifyContent: "space-between" },
   cartCountLabel: { color: "#6b7c74" },
   cartCountVal: { fontWeight: "700", color: "#2c3e35" },
-  cartTotalRow: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.08)", paddingTop: 8 },
+  cartTotalRow: { flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, borderTopColor: "rgba(0,0,0,0.04)", paddingTop: 8, marginTop: 4 },
   cartTotalLabel: { fontWeight: "700", fontStyle: "italic" },
   cartTotalVal: { fontWeight: "700", fontStyle: "italic" },
-  payBtn: { flexDirection: "row", gap: 8, paddingVertical: 14, alignItems: "center", justifyContent: "center", elevation: 4 },
+  payBtn: { flexDirection: "row", gap: 8, paddingVertical: 14, alignItems: "center", justifyContent: "center", borderRadius: 12 },
   payBtnText: { color: "#fff", fontWeight: "700" },
-  clearBtn: { borderWidth: 1, borderColor: "#D1C7BD", paddingVertical: 10, alignItems: "center" },
-  clearBtnText: { color: "#AC9C8D" },
+  clearBtn: { paddingVertical: 10, alignItems: "center" },
+  clearBtnText: { color: "#AC9C8D", fontSize: 13 },
 
   // Payment Modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", alignItems: "center" },
-  paymentModal: { backgroundColor: "#fff", width: 480, padding: 28, elevation: 10, alignItems: "center" },
+  paymentModal: { backgroundColor: "#fff", width: 480, padding: 28, borderRadius: 16, alignItems: "center" },
   paymentHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", width: "100%", marginBottom: 16 },
   paymentTitle: { fontWeight: "700" },
   countdownBox: { flexDirection: "row", alignItems: "baseline", gap: 4, backgroundColor: "rgba(0,0,0,0.04)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
@@ -853,7 +985,7 @@ const ds = StyleSheet.create({
   cancelPayText: { fontSize: 15, color: "#8a9b93" },
 
   // Receipt Modal
-  receiptModal: { backgroundColor: "#fff", width: 440, padding: 24, elevation: 10 },
+  receiptModal: { backgroundColor: "#fff", width: 440, padding: 24, borderRadius: 16 },
   receiptHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 },
   receiptLogo: { fontSize: 22, fontWeight: "700", fontStyle: "italic" },
   receiptAddress: { fontSize: 11, color: "#8a9b93", marginTop: 2 },
@@ -877,7 +1009,7 @@ const ds = StyleSheet.create({
   receiptCloseBtnText: { fontSize: 18, fontWeight: "700", color: "#fff" },
 
   // Admin Auth
-  adminAuthModal: { backgroundColor: "#fff", width: 380, padding: 28, elevation: 10, alignItems: "center" },
+  adminAuthModal: { backgroundColor: "#fff", width: 380, padding: 28, borderRadius: 16, alignItems: "center" },
   adminAuthTitle: { fontSize: 22, fontWeight: "700", marginTop: 12, marginBottom: 4 },
   adminAuthDesc: { fontSize: 14, color: "#6b7c74", textAlign: "center", marginBottom: 20 },
   adminAuthInput: { width: "100%", height: 48, borderWidth: 1, borderColor: "#d1d5db", paddingHorizontal: 16, fontSize: 18, color: "#2c3e35", textAlign: "center", marginBottom: 14 },
@@ -887,10 +1019,10 @@ const ds = StyleSheet.create({
   adminAuthCancelText: { fontSize: 15, color: "#8a9b93" },
 
   // Screensaver
-  screensaver: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#322D29", justifyContent: "center", alignItems: "center", gap: 48, zIndex: 100 },
+  screensaver: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#F7F5F2", justifyContent: "center", alignItems: "center", gap: 48, zIndex: 100 },
   ssLogoWrapper: { width: 160, height: 160, justifyContent: "center", alignItems: "center" },
   ssRing: { position: "absolute", width: 160, height: 160, borderRadius: 80, borderWidth: 3 },
   ssLogo: { fontSize: 60, fontWeight: "700" },
-  ssTitle: { fontSize: 40, fontWeight: "700", color: "#EFE9E1", letterSpacing: 2 },
-  ssHint: { fontSize: 18, color: "rgba(239,233,225,0.5)", letterSpacing: 4, textTransform: "uppercase" },
+  ssTitle: { fontSize: 40, fontWeight: "700", color: "#2c3e35", letterSpacing: 2 },
+  ssHint: { fontSize: 18, color: "rgba(44,62,53,0.4)", letterSpacing: 4, textTransform: "uppercase" },
 });

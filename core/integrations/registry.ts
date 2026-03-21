@@ -21,7 +21,7 @@ export const INTEGRATIONS: Integration[] = [
       ]},
       { key: "apiKey", label: "API-nyckel", type: "password", required: true, placeholder: "re_..." },
       { key: "fromEmail", label: "Avsändaradress", type: "email", required: true, placeholder: "kvitto@dinbutik.se" },
-      { key: "fromName", label: "Avsändarnamn", type: "text", placeholder: "Elo Kiosk" },
+      { key: "fromName", label: "Avsändarnamn", type: "text", placeholder: "Corevo Kiosk" },
     ],
   },
   {
