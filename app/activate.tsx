@@ -126,7 +126,7 @@ export default function ActivateScreen() {
             maxLength={8}
           />
           <Text style={styles.hint}>
-            Ange den 8-siffriga licenskoden du fått via e-post.
+            Ange den 8-teckiga licenskoden du fått via e-post.
           </Text>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
