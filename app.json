@@ -40,8 +40,12 @@
     },
     "extra": {
       "eas": {
-        "projectId": "elo-kiosk"
+        "projectId": "3b36dbee-07f5-4d76-9160-da802d3a0476"
+      },
+      "router": {
+        "origin": false
       }
-    }
+    },
+    "owner": "zivar"
   }
 }
