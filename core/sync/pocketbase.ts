@@ -60,10 +60,14 @@ const LICENSE_KEY = "elo_license_key";
 const TENANT_KEY = "elo_tenant_id";
 const KIOSK_KEY = "elo_kiosk_id";
 
+// Cached kiosk ID — cleared on logout/license change
+let _cachedKioskId: string | null = null;
+
 export async function saveLicenseData(licenseKey: string, tenantId: string, kioskId: string): Promise<void> {
   await AsyncStorage.setItem(LICENSE_KEY, licenseKey);
   await AsyncStorage.setItem(TENANT_KEY, tenantId);
   await AsyncStorage.setItem(KIOSK_KEY, kioskId);
+  _cachedKioskId = kioskId;
 }
 
 export async function getLicenseData(): Promise<{ licenseKey: string | null; tenantId: string | null; kioskId: string | null }> {
@@ -77,14 +81,13 @@ export async function getLicenseData(): Promise<{ licenseKey: string | null; ten
 
 export async function clearLicenseData(): Promise<void> {
   await AsyncStorage.multiRemove([LICENSE_KEY, TENANT_KEY, KIOSK_KEY]);
+  _cachedKioskId = null;
 }
 
 /**
  * Get the active kiosk ID — used by all CRUD operations for data isolation.
  * Returns empty string if not activated (seed data fallback).
  */
-let _cachedKioskId: string | null = null;
-
 export async function getActiveKioskId(): Promise<string> {
   if (_cachedKioskId !== null) return _cachedKioskId;
   const kioskId = await AsyncStorage.getItem(KIOSK_KEY);
